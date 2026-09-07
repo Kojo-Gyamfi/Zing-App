@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+/*
+ * Zing is dark-only by design. There is no light theme and no toggle --
+ * committing to one surface keeps the bubble contrast tuned and stops
+ * every component carrying two sets of colours.
+ */
+
+@theme {
+  /* Surfaces, darkest to lightest */
+  --color-void: #0b0f10;      /* app background */
+  --color-surface: #151b1d;   /* chat list rows, composer */
+  --color-elevated: #1d2528;  /* sheets, menus, pressed states */
+  --color-line: #253034;      /* hairline dividers */
+
+  /* Type */
+  --color-ink: #e8edee;
+  --color-muted: #8a9a9d;
+  --color-faint: #5c6b6e;
+
+  /* Electric Teal, sampled from the logo artwork (#01cfc1) so the mark and
+     the UI are literally the same colour rather than nearly the same. */
+  --color-zing: #00cfc1;
+  --color-zing-dim: #00a89b;   /* hover and pressed */
+  --color-zing-soft: #43e3d8;  /* ticks and small marks that need extra lift */
+  --color-on-zing: #00201d;    /* 8.8:1 on the accent */
+
+  /* Bubbles. Outgoing carries the accent's hue at low lightness so it reads
+     as "mine" without glowing at 2am. */
+  --color-bubble-out: #063934;
+  --color-bubble-in: #1a2225;
+
+  --color-danger: #ff5f57;
+
+  /* Motion: short and snappy. The name of the app is a promise about speed. */
+  --ease-zing: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-void);
+  color: var(--color-ink);
+  overscroll-behavior-y: none;
+}
+
+body {
+  /* dvh, not vh: mobile browser chrome collapses and vh lies about it. */
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Notch and home-indicator padding, used by the app shell. */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* The message list scrolls; nothing else does. */
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
