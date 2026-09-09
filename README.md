@@ -38,12 +38,17 @@ Two of these are effectively permanent, so get them right the first time.
 ## 2. Configure
 
 ```bash
-cp .env.local.example .env.local
+npm install
+npm run setup
 ```
 
-Fill it in. The `NEXT_PUBLIC_*` values are public by design — they identify the
-project and authorize nothing. `FIREBASE_SERVICE_ACCOUNT` is the whole service
-account JSON on one line, and is secret.
+It asks for the `firebaseConfig` block, the Realtime Database URL, the VAPID key,
+and the path to the service account file — then writes `.env.local`, flattening
+the service account JSON onto the single line dotenv requires.
+
+To do it by hand instead, copy `.env.local.example` and fill it in. The
+`NEXT_PUBLIC_*` values are public by design: they identify the project and
+authorize nothing. `FIREBASE_SERVICE_ACCOUNT` is the one real secret.
 
 ## 3. Deploy the security rules
 
@@ -60,7 +65,6 @@ firebase deploy --only firestore,database
 ## 4. Run it
 
 ```bash
-npm install
 npm run dev
 ```
 
