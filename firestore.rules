@@ -18,6 +18,14 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    // True when the caller and `uid` have a direct chat. Chat ids are the two
+    // uids sorted and joined (enforced on create), so this is one lookup.
+    function sharesChatWith(uid) {
+      let me = request.auth.uid;
+      let chatId = me < uid ? me + '_' + uid : uid + '_' + me;
+      return signedIn() && exists(/databases/$(database)/documents/chats/$(chatId));
+    }
+
     function chatMembers(chatId) {
       return get(/databases/$(database)/documents/chats/$(chatId)).data.members;
     }
@@ -28,7 +36,8 @@ service cloud.firestore {
     // passphrase. Listing is off: nobody needs to enumerate every user.
     //
     // Nothing private may live on this doc. The field allowlists below are what
-    // keep it that way; phone and push tokens go in private/account.
+    // keep it that way; push tokens go in private/account, the phone number in
+    // shared/contact.
     match /users/{uid} {
       allow get: if signedIn();
       allow list: if false;
@@ -55,10 +64,18 @@ service cloud.firestore {
 
       allow delete: if false;
 
-      // Owner-only: phone number and push tokens. The push route reads this
-      // with admin credentials, which bypass rules.
+      // Owner-only: push tokens (plus a phone number on a few early accounts,
+      // moved out on their next save). The push route reads this with admin
+      // credentials, which bypass rules.
       match /private/{docId} {
         allow read, write: if isSelf(uid);
+      }
+
+      // The phone number: shown on the profile of someone you already chat
+      // with, never to arbitrary signed-in users.
+      match /shared/{docId} {
+        allow read: if isSelf(uid) || sharesChatWith(uid);
+        allow write: if isSelf(uid);
       }
     }
 
@@ -76,14 +93,14 @@ service cloud.firestore {
 
     // Phone number claims, for "find by phone". get works for someone who
     // already knows the number; list does not, so the set cannot be dumped.
-    // A claim must match the number in the claimant's own private account doc,
-    // so each account holds at most one.
+    // A claim must match the number in the claimant's own contact doc, so each
+    // account holds at most one.
     match /phones/{phone} {
       allow get: if signedIn();
       allow list: if false;
       allow create: if signedIn()
                     && request.resource.data.uid == request.auth.uid
-                    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/private/account).data.phone == phone;
+                    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/shared/contact).data.phone == phone;
       allow delete: if signedIn() && resource.data.uid == request.auth.uid;
       allow update: if false;
     }
@@ -126,17 +143,57 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // "Delete for me": the ids of messages one member has hidden. Private to
+      // that member -- the other person never learns what was hidden.
+      match /hidden/{uid} {
+        allow read, write: if isSelf(uid) && request.auth.uid in chatMembers(chatId);
+      }
+
       match /messages/{messageId} {
         allow read: if signedIn() && request.auth.uid in chatMembers(chatId);
 
+        // createdAt must be the server's clock: the edit window below is
+        // measured from it, so a backdated or future-dated message would get
+        // the wrong window.
         allow create: if signedIn()
                       && request.auth.uid in chatMembers(chatId)
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.ciphertext is string
-                      && request.resource.data.nonce is string;
+                      && request.resource.data.nonce is string
+                      && request.resource.data.createdAt == request.time
+                      && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt']);
 
-        // No edit or delete in v1 -- history is append-only.
-        allow update, delete: if false;
+        // Only the sender may change a message, and only in two shapes. A
+        // deleted message is final.
+        //
+        // Edit: new ciphertext and nonce, within 15 minutes of sending (keep in
+        // step with EDIT_WINDOW_MS in lib/db/schema.ts).
+        //
+        // Delete for everyone: ciphertext and nonce removed outright, leaving a
+        // tombstone with nothing to decrypt.
+        allow update: if signedIn()
+                      && resource.data.senderId == request.auth.uid
+                      && request.auth.uid in chatMembers(chatId)
+                      && !resource.data.get('deleted', false)
+                      && (
+                        (
+                          request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['ciphertext', 'nonce', 'editedAt'])
+                          && request.resource.data.ciphertext is string
+                          && request.resource.data.nonce is string
+                          && request.resource.data.editedAt == request.time
+                          && request.time < resource.data.createdAt + duration.value(15, 'm')
+                        ) || (
+                          request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['ciphertext', 'nonce', 'deleted', 'deletedAt'])
+                          && request.resource.data.deleted == true
+                          && request.resource.data.deletedAt == request.time
+                          && !request.resource.data.keys().hasAny(['ciphertext', 'nonce'])
+                        )
+                      );
+
+        // Tombstones rather than removal, so replies and pagination survive.
+        allow delete: if false;
       }
     }
   }

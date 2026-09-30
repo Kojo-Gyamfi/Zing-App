@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
+import { returnPath } from '@/lib/returnTo';
 
 const MIN_PASSPHRASE = 10;
 
@@ -37,7 +38,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (status === 'signedOut') router.replace('/login');
-    if (status === 'ready') router.replace('/chats');
+    if (status === 'ready') router.replace(returnPath());
     if (status === 'locked') router.replace('/unlock');
   }, [status, router]);
 
@@ -102,7 +103,7 @@ export default function OnboardingPage() {
 
       const profile = await getUser(user!.uid);
       if (profile) setIdentity(identity, profile);
-      router.replace('/chats');
+      router.replace(returnPath());
     } catch (cause) {
       const code = (cause as Error).message;
       setError(
@@ -146,7 +147,7 @@ export default function OnboardingPage() {
 
           <Field
             label="Phone number"
-            hint="Optional. Lets friends who know your number find you — nothing is sent to it."
+            hint="Optional. Lets friends find you, and people you chat with can see it. Nothing is sent to it."
             value={phone}
             onChange={(event) => setPhone(event.target.value)}
             placeholder="+233 …"

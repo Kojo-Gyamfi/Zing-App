@@ -3,33 +3,27 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@/lib/store/session';
-import { keyFingerprint } from '@/lib/crypto/safetyNumber';
-import { getAccount, setPhone as savePhone, updateProfile } from '@/lib/db/users';
+import { getPhone, setPhone as savePhone, updateProfile } from '@/lib/db/users';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 
 export default function SettingsPage() {
-  const { profile, identity, signOut, refreshProfile } = useSession();
+  const { profile, signOut, refreshProfile } = useSession();
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
   const [phone, setPhone] = useState('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
-  const [fingerprint, setFingerprint] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
-  useEffect(() => {
-    if (identity) void keyFingerprint(identity.publicKey).then(setFingerprint);
-  }, [identity]);
-
-  // The number lives in the owner-only account doc, not the public profile.
+  // The number lives in its own doc, not the public profile.
   const uid = profile?.uid;
   useEffect(() => {
     if (!uid) return;
-    void getAccount(uid).then((account) => setPhone(account?.phone ?? ''));
+    void getPhone(uid, true).then((number) => setPhone(number ?? ''));
   }, [uid]);
 
   async function save() {
@@ -103,7 +97,7 @@ export default function SettingsPage() {
           />
           <Field
             label="Phone number"
-            hint="Optional. Only used so friends can find you."
+            hint="Optional. Lets friends find you, and people you chat with can see it."
             value={phone}
             onChange={(event) => setPhone(event.target.value)}
             inputMode="tel"
@@ -128,30 +122,10 @@ export default function SettingsPage() {
           </h2>
 
           <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
-            <div>
-              <p className="text-[13px] text-muted">Your key fingerprint</p>
-              <p className="mt-1 font-mono text-[13px] break-all text-ink">{fingerprint}</p>
-            </div>
-
             <p className="text-[12px] leading-relaxed text-faint">
               Messages are sealed on this device before they are sent. We store them as ciphertext
               and hold no key that opens them — which also means we cannot recover them for you.
             </p>
-
-            <details className="text-[12px] leading-relaxed text-faint">
-              <summary className="cursor-pointer text-muted">What this does not cover</summary>
-              <ul className="mt-2 list-disc space-y-1 pl-4">
-                <li>
-                  Who you talk to, and when, is visible to us. Encryption hides the words, not the
-                  pattern.
-                </li>
-                <li>
-                  There is one key per conversation rather than one per message, so it has no
-                  forward secrecy.
-                </li>
-                <li>Search only covers messages already decrypted on this device.</li>
-              </ul>
-            </details>
           </div>
         </section>
 

@@ -9,6 +9,9 @@ import {
   onSnapshot,
   writeBatch,
   serverTimestamp,
+  deleteField,
+  setDoc,
+  arrayUnion,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
@@ -58,6 +61,7 @@ export async function sendMessage(params: {
 
   batch.update(doc(db(), 'chats', params.chatId), {
     lastMessage: {
+      id: messageRef.id,
       ciphertext: envelope.ciphertext,
       nonce: envelope.nonce,
       senderId: params.senderId,
@@ -76,14 +80,113 @@ async function decrypt(
   // keeps optimistic messages in the right order until the server confirms.
   const data = entry.data({ serverTimestamps: 'estimate' }) as MessageDoc;
 
+  const deleted = data.deleted === true;
+
   return {
     id: entry.id,
     senderId: data.senderId,
-    text: await open({ ciphertext: data.ciphertext, nonce: data.nonce }, conversationKey),
+    text:
+      deleted || !data.ciphertext || !data.nonce
+        ? null
+        : await open({ ciphertext: data.ciphertext, nonce: data.nonce }, conversationKey),
     createdAt: data.createdAt?.toDate() ?? null,
     replyTo: data.replyTo ?? null,
+    edited: !deleted && Boolean(data.editedAt),
+    deleted,
     pending: entry.metadata.hasPendingWrites,
   };
+}
+
+/**
+ * Replace a message's text. The new text is sealed afresh -- new nonce, same
+ * conversation key -- so the server sees only that the ciphertext changed.
+ *
+ * `isLatest` comes from the thread the caller is looking at. When the edited
+ * message is the newest one, the chat-list preview is rewritten in the same
+ * batch so the two cannot disagree. updatedAt is left alone: an edit is not new
+ * mail and must not bump the chat or mark it unread.
+ */
+export async function editMessage(params: {
+  chatId: string;
+  messageId: string;
+  senderId: string;
+  text: string;
+  conversationKey: Uint8Array;
+  isLatest: boolean;
+}): Promise<void> {
+  const envelope = await seal(params.text, params.conversationKey);
+  const batch = writeBatch(db());
+
+  batch.update(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
+    ciphertext: envelope.ciphertext,
+    nonce: envelope.nonce,
+    editedAt: serverTimestamp(),
+  });
+
+  if (params.isLatest) {
+    batch.update(doc(db(), 'chats', params.chatId), {
+      lastMessage: { id: params.messageId, senderId: params.senderId, ...envelope },
+    });
+  }
+
+  await batch.commit();
+}
+
+/**
+ * Delete for everyone. The doc stays as a tombstone -- so replies to it and
+ * pagination keep working -- but the ciphertext and nonce are removed, so there
+ * is nothing left in Firestore to decrypt even for someone holding the key.
+ */
+export async function deleteMessage(params: {
+  chatId: string;
+  messageId: string;
+  senderId: string;
+  isLatest: boolean;
+}): Promise<void> {
+  const batch = writeBatch(db());
+
+  batch.update(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
+    ciphertext: deleteField(),
+    nonce: deleteField(),
+    deleted: true,
+    deletedAt: serverTimestamp(),
+  });
+
+  if (params.isLatest) {
+    batch.update(doc(db(), 'chats', params.chatId), {
+      lastMessage: { id: params.messageId, senderId: params.senderId, deleted: true },
+    });
+  }
+
+  await batch.commit();
+}
+
+export const DELETED_LABEL = 'This message was deleted';
+
+/**
+ * "Delete for me": message ids this user has hidden in one chat.
+ *
+ * Stored in Firestore rather than on the device so the choice follows the
+ * account to a new phone. Only ids -- the message itself is untouched and the
+ * other person still has it.
+ */
+const hiddenRef = (chatId: string, uid: string) => doc(db(), 'chats', chatId, 'hidden', uid);
+
+export function subscribeHidden(
+  chatId: string,
+  uid: string,
+  onChange: (ids: Set<string>) => void,
+) {
+  return onSnapshot(
+    hiddenRef(chatId, uid),
+    (snapshot) => onChange(new Set((snapshot.data()?.ids as string[] | undefined) ?? [])),
+    // Rules not deployed yet, or offline with nothing cached: hide nothing.
+    () => onChange(new Set()),
+  );
+}
+
+export async function hideMessage(chatId: string, uid: string, messageId: string): Promise<void> {
+  await setDoc(hiddenRef(chatId, uid), { ids: arrayUnion(messageId) }, { merge: true });
 }
 
 /**
@@ -136,9 +239,10 @@ export async function loadOlderMessages(
 
 /** Decrypt a chat-list preview. */
 export async function decryptPreview(
-  lastMessage: { ciphertext: string; nonce: string } | null,
+  lastMessage: { ciphertext?: string; nonce?: string; deleted?: boolean } | null,
   conversationKey: Uint8Array | null,
 ): Promise<string | null> {
-  if (!lastMessage || !conversationKey) return null;
-  return open(lastMessage, conversationKey);
+  if (lastMessage?.deleted) return DELETED_LABEL;
+  if (!lastMessage?.ciphertext || !lastMessage.nonce || !conversationKey) return null;
+  return open({ ciphertext: lastMessage.ciphertext, nonce: lastMessage.nonce }, conversationKey);
 }

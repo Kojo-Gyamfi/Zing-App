@@ -96,7 +96,11 @@ export async function loadConversationKey(
   return openConversationKey(sealed, identity);
 }
 
-export type ChatSummary = ChatDoc & { id: string };
+export type ChatSummary = ChatDoc & {
+  id: string;
+  /** Local writes not yet confirmed; their timestamps are this device's guess. */
+  pending: boolean;
+};
 
 /** The chat list. Backed by the members array-contains + updatedAt index. */
 export function subscribeChats(uid: string, onChange: (chats: ChatSummary[]) => void) {
@@ -111,6 +115,7 @@ export function subscribeChats(uid: string, onChange: (chats: ChatSummary[]) => 
         snapshot.docs.map((entry) => ({
           id: entry.id,
           ...(entry.data({ serverTimestamps: 'estimate' }) as ChatDoc),
+          pending: entry.metadata.hasPendingWrites,
         })),
       );
     },
@@ -143,7 +148,11 @@ export function subscribeChat(chatId: string, onChange: (chat: ChatSummary | nul
   return onSnapshot(doc(db(), 'chats', chatId), (snapshot) => {
     onChange(
       snapshot.exists()
-        ? { id: snapshot.id, ...(snapshot.data({ serverTimestamps: 'estimate' }) as ChatDoc) }
+        ? {
+            id: snapshot.id,
+            ...(snapshot.data({ serverTimestamps: 'estimate' }) as ChatDoc),
+            pending: snapshot.metadata.hasPendingWrites,
+          }
         : null,
     );
   });

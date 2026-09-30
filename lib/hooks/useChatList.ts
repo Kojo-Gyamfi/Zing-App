@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSession } from '@/lib/store/session';
 import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
 import { subscribeChats, markDelivered, type ChatSummary } from '@/lib/db/chats';
 import { decryptPreview } from '@/lib/db/messages';
+import { needsDeliveryReceipt } from '@/lib/receipts';
 import type { UserDoc } from '@/lib/db/schema';
 
 export type ChatListRow = {
@@ -37,6 +38,9 @@ export function useChatList() {
   const [rows, setRows] = useState<ChatListRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // chatId -> the updatedAt we already sent a delivery receipt for. See below.
+  const acknowledged = useRef(new Map<string, number>());
+
   useEffect(() => {
     if (!user || !identity) return;
 
@@ -59,13 +63,23 @@ export function useChatList() {
           // as long as the app is open, so this fires even when the
           // conversation itself is closed -- which is exactly what delivered
           // is supposed to mean.
+          // needsDeliveryReceipt carries the guards against a write loop.
           if (
-            chat.lastMessage !== null &&
-            chat.lastMessage.senderId !== user.uid &&
             updatedAt !== null &&
-            (deliveredAt === null || updatedAt > deliveredAt)
+            needsDeliveryReceipt({
+              me: user.uid,
+              pending: chat.pending,
+              lastSenderId: chat.lastMessage?.senderId ?? null,
+              updatedAt,
+              deliveredAt,
+              acknowledged: acknowledged.current.get(chat.id),
+            })
           ) {
-            void markDelivered(chat.id, user.uid);
+            acknowledged.current.set(chat.id, updatedAt.getTime());
+            void markDelivered(chat.id, user.uid).catch(() => {
+              // Let the next snapshot try again.
+              acknowledged.current.delete(chat.id);
+            });
           }
 
           return {

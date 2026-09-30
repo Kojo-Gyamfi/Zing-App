@@ -15,9 +15,17 @@ import type { Identity } from '@/lib/crypto/types';
  * the tab discards them. The private key in IndexedDB can always re-derive
  * them.
  */
+/**
+ * A key that is not there yet (the other side is still writing it) is worth
+ * re-checking, but not on every chat-list snapshot -- that was one read per
+ * snapshot per such chat.
+ */
+const MISS_TTL_MS = 5000;
+
 type KeyState = {
   keys: Record<string, Uint8Array>;
   pending: Record<string, Promise<Uint8Array | null>>;
+  misses: Record<string, number>;
   get: (chatId: string, uid: string, identity: Identity) => Promise<Uint8Array | null>;
   clear: () => void;
 };
@@ -25,10 +33,14 @@ type KeyState = {
 export const useKeys = create<KeyState>((set, get) => ({
   keys: {},
   pending: {},
+  misses: {},
 
   get: async (chatId, uid, identity) => {
     const cached = get().keys[chatId];
     if (cached) return cached;
+
+    const missedAt = get().misses[chatId];
+    if (missedAt && Date.now() - missedAt < MISS_TTL_MS) return null;
 
     // Collapse concurrent requests -- the chat list asks for the same key from
     // several rows at once on first paint.
@@ -38,6 +50,8 @@ export const useKeys = create<KeyState>((set, get) => ({
     const request = loadConversationKey(chatId, uid, identity).then((key) => {
       if (key) {
         set((state) => ({ keys: { ...state.keys, [chatId]: key } }));
+      } else {
+        set((state) => ({ misses: { ...state.misses, [chatId]: Date.now() } }));
       }
       set((state) => {
         const pending = { ...state.pending };
@@ -51,5 +65,5 @@ export const useKeys = create<KeyState>((set, get) => ({
     return request;
   },
 
-  clear: () => set({ keys: {}, pending: {} }),
+  clear: () => set({ keys: {}, pending: {}, misses: {} }),
 }));

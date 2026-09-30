@@ -22,8 +22,12 @@ export type UserDoc = {
 
 /** users/{uid}/private/account -- readable by its owner and the push route only. */
 export type AccountDoc = {
-  phone: string | null;  // optional, discovery only; mirrored as a phones/{phone} claim
   pushTokens: string[];
+};
+
+/** users/{uid}/shared/contact -- readable by its owner and anyone they have a chat with. */
+export type ContactDoc = {
+  phone: string | null;  // optional; mirrored as a phones/{phone} claim for discovery
 };
 
 export type PhoneDoc = {
@@ -37,9 +41,13 @@ export type UsernameDoc = {
 export type ChatDoc = {
   members: string[];
   lastMessage: {
-    ciphertext: string;
-    nonce: string;
+    /** Lets an edit or delete of the newest message fix the preview too. */
+    id?: string;
     senderId: string;
+    /** Absent once the message has been deleted for everyone. */
+    ciphertext?: string;
+    nonce?: string;
+    deleted?: boolean;
   } | null;
   updatedAt: Timestamp;
   /** Ticks derive from these two. One write per event, never one per message. */
@@ -55,12 +63,19 @@ export type ConversationKeyDoc = {
 
 export type MessageDoc = {
   senderId: string;
-  ciphertext: string;
-  nonce: string;
+  /** Both removed when the sender deletes for everyone -- nothing is left to decrypt. */
+  ciphertext?: string;
+  nonce?: string;
   type: 'text';
   createdAt: Timestamp;
+  /** Id of the quoted message. Only the id: the quote is rendered from local plaintext. */
   replyTo: string | null;
+  editedAt?: Timestamp;
+  deleted?: boolean;
 };
+
+/** Senders may edit for this long after sending, like WhatsApp. Mirrored in firestore.rules. */
+export const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
 /** A message after local decryption -- never persisted in this form. */
 export type DecryptedMessage = {
@@ -70,6 +85,8 @@ export type DecryptedMessage = {
   text: string | null;
   createdAt: Date | null;
   replyTo: string | null;
+  edited: boolean;
+  deleted: boolean;
   /** True while the write is still in flight -- drives the clock icon. */
   pending: boolean;
   /** The server refused the write. Held in memory only, so it can be retried. */

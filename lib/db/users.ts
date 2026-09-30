@@ -6,9 +6,10 @@ import {
   runTransaction,
   serverTimestamp,
   arrayUnion,
+  deleteField,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
-import type { UserDoc, AccountDoc } from './schema';
+import type { UserDoc, AccountDoc, ContactDoc } from './schema';
 import type { KeyBackup } from '@/lib/crypto/types';
 
 export async function getUser(uid: string): Promise<UserDoc | null> {
@@ -28,11 +29,16 @@ export function normalizePhone(raw: string): string | null {
 }
 
 /**
- * The owner-only half of a profile. users/{uid} is readable by every signed-in
- * user, so anything that should not be -- the phone number, push tokens --
- * lives here instead.
+ * The owner-only part of a profile: push tokens. users/{uid} is readable by
+ * every signed-in user, so nothing private may live there.
  */
 const accountRef = (uid: string) => doc(db(), 'users', uid, 'private', 'account');
+
+/**
+ * The phone number. Readable by its owner and by anyone who already has a chat
+ * with them -- not by every signed-in user, which is what users/{uid} allows.
+ */
+const contactRef = (uid: string) => doc(db(), 'users', uid, 'shared', 'contact');
 
 /**
  * Phone lookup doc. Rules allow get but never list, so a number can be checked
@@ -80,7 +86,8 @@ export async function createProfile(params: {
       keyBackup: params.keyBackup,
       createdAt: serverTimestamp(),
     });
-    transaction.set(accountRef(params.uid), { phone, pushTokens: [] } satisfies AccountDoc);
+    transaction.set(accountRef(params.uid), { pushTokens: [] } satisfies AccountDoc);
+    transaction.set(contactRef(params.uid), { phone } satisfies ContactDoc);
     if (phone) transaction.set(phoneRef(phone), { uid: params.uid });
   });
 }
@@ -104,9 +111,24 @@ export async function findByPhone(raw: string): Promise<UserDoc | null> {
   return getUser((claim.data() as { uid: string }).uid);
 }
 
-export async function getAccount(uid: string): Promise<AccountDoc | null> {
-  const snapshot = await getDoc(accountRef(uid));
-  return snapshot.exists() ? (snapshot.data() as AccountDoc) : null;
+/**
+ * Someone's phone number, or null if they have none or we may not see it.
+ *
+ * `own` also checks the old location: for a short while the number lived in
+ * the owner-only account doc, and setPhone moves it across on the next save.
+ */
+export async function getPhone(uid: string, own = false): Promise<string | null> {
+  try {
+    const contact = await getDoc(contactRef(uid));
+    const phone = (contact.data() as ContactDoc | undefined)?.phone ?? null;
+    if (phone || !own) return phone;
+
+    const account = await getDoc(accountRef(uid));
+    return (account.data()?.phone as string | undefined) ?? null;
+  } catch {
+    // Permission denied: no chat with this person, so their number is not ours to see.
+    return null;
+  }
 }
 
 /**
@@ -117,9 +139,11 @@ export async function setPhone(uid: string, raw: string): Promise<void> {
   const next = normalizePhone(raw);
 
   await runTransaction(db(), async (transaction) => {
+    const contact = await transaction.get(contactRef(uid));
     const account = await transaction.get(accountRef(uid));
-    const current = (account.data()?.phone as string | null | undefined) ?? null;
-    if (current === next) return;
+    const legacy = (account.data()?.phone as string | null | undefined) ?? null;
+    const current = (contact.data()?.phone as string | null | undefined) ?? legacy;
+    if (current === next && !legacy) return;
 
     // Claims are create-only, so one we already hold must not be rewritten.
     let alreadyMine = false;
@@ -129,8 +153,9 @@ export async function setPhone(uid: string, raw: string): Promise<void> {
       alreadyMine = claim.exists();
     }
 
-    if (current) transaction.delete(phoneRef(current));
-    transaction.set(accountRef(uid), { phone: next }, { merge: true });
+    if (current && current !== next) transaction.delete(phoneRef(current));
+    transaction.set(contactRef(uid), { phone: next } satisfies ContactDoc);
+    if (legacy) transaction.set(accountRef(uid), { phone: deleteField() }, { merge: true });
     if (next && !alreadyMine) transaction.set(phoneRef(next), { uid });
   });
 }

@@ -9,6 +9,7 @@ import { saveIdentity } from '@/lib/crypto/vault';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
+import { returnPath } from '@/lib/returnTo';
 
 /**
  * Reached whenever the account is known but this device holds no key:
@@ -26,7 +27,7 @@ export default function UnlockPage() {
   useEffect(() => {
     if (status === 'signedOut') router.replace('/login');
     if (status === 'needsProfile') router.replace('/onboarding');
-    if (status === 'ready') router.replace('/chats');
+    if (status === 'ready') router.replace(returnPath());
   }, [status, router]);
 
   if (status === 'loading' || !profile) return <Splash />;
@@ -47,7 +48,7 @@ export default function UnlockPage() {
 
     await saveIdentity(privateKey);
     setIdentity({ privateKey, publicKey: await publicKeyFrom(privateKey) }, profile!);
-    router.replace('/chats');
+    router.replace(returnPath());
   }
 
   return (

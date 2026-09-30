@@ -7,8 +7,9 @@ import { useThread } from '@/lib/hooks/useThread';
 import { dayLabel, lastSeenLabel } from '@/lib/format';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { MessageBubble } from '@/components/chat/MessageBubble';
-import { Composer } from '@/components/chat/Composer';
+import { MessageBubble, type Quote } from '@/components/chat/MessageBubble';
+import { MessageMenu } from '@/components/chat/MessageMenu';
+import { Composer, type ComposerContext } from '@/components/chat/Composer';
 import { TypingDots } from '@/components/chat/TypingDots';
 import { tickState } from '@/components/chat/Ticks';
 import { ChatInfoSheet } from '@/components/chat/ChatInfoSheet';
@@ -16,8 +17,11 @@ import type { DecryptedMessage } from '@/lib/db/schema';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
-  const { user, identity } = useSession();
+  const { user } = useSession();
   const [infoOpen, setInfoOpen] = useState(false);
+  const [menuFor, setMenuFor] = useState<DecryptedMessage | null>(null);
+  const [composerContext, setComposerContext] = useState<ComposerContext>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
 
   // Direct chat ids are the two uids sorted and joined, so the peer is
   // derivable without a lookup.
@@ -34,8 +38,12 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     loading,
     conversationKey,
     sendText,
+    editText,
+    deleteForEveryone,
+    deleteForMe,
     retry,
     discard,
+    notice,
     ping,
     loadOlder,
     exhausted,
@@ -55,6 +63,48 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   }, [messages.length, peerTyping]);
 
   const groups = useMemo(() => groupByDay(messages), [messages]);
+  const byId = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
+
+  const authorOf = (message: DecryptedMessage) =>
+    message.senderId === user?.uid ? 'You' : (peer?.displayName ?? 'Them');
+
+  // Quotes are rendered from plaintext already decrypted on this device; the
+  // message itself stores only the id it replies to.
+  function quoteFor(message: DecryptedMessage): Quote | null {
+    if (!message.replyTo) return null;
+    const original = byId.get(message.replyTo);
+    if (!original) return { author: '', text: null, deleted: false };
+    return { author: authorOf(original), text: original.text, deleted: original.deleted };
+  }
+
+  function replyTo(message: DecryptedMessage) {
+    setComposerContext({
+      kind: 'reply',
+      id: message.id,
+      author: authorOf(message),
+      text: message.text,
+    });
+  }
+
+  function jumpTo(id: string) {
+    const node = document.getElementById(`m-${id}`);
+    if (!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlighted(id);
+    setTimeout(() => setHighlighted((current) => (current === id ? null : current)), 1200);
+  }
+
+  function handleSend(text: string) {
+    const context = composerContext;
+    setComposerContext(null);
+
+    if (context?.kind === 'edit') {
+      if (text !== context.text) editText(context.id, text);
+      return;
+    }
+    atBottom.current = true;
+    return sendText(text, context?.kind === 'reply' ? context.id : null);
+  }
 
   return (
     <div className="flex h-dvh flex-col bg-void">
@@ -110,7 +160,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
           if (node.scrollTop < 120 && !exhausted) void loadOlder();
         }}
-        className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3 scroll-thin"
+        // overflow-x-hidden: a bubble dragged for swipe-to-reply must not
+        // widen the scroller.
+        className="min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto px-3 py-3 scroll-thin"
       >
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-muted">
@@ -138,6 +190,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
                     message={message}
                     mine={mine}
                     tailed={!next || next.senderId !== message.senderId}
+                    quote={quoteFor(message)}
+                    highlighted={highlighted === message.id}
+                    onReply={() => replyTo(message)}
+                    onMenu={() => setMenuFor(message)}
+                    onQuoteClick={() => message.replyTo && jumpTo(message.replyTo)}
                     onRetry={() => retry(message.id)}
                     onDiscard={() => discard(message.id)}
                     tick={tickState({
@@ -154,10 +211,37 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         )}
       </div>
 
-      <Composer onSend={sendText} onTyping={ping} disabled={!loading && !conversationKey} />
+      {notice && (
+        <p role="status" className="bg-surface px-4 pt-2 text-center text-[13px] text-danger">
+          {notice}
+        </p>
+      )}
 
-      {infoOpen && peer && identity && (
-        <ChatInfoSheet peer={peer} identity={identity} onClose={() => setInfoOpen(false)} />
+      <Composer
+        onSend={handleSend}
+        onTyping={ping}
+        disabled={!loading && !conversationKey}
+        context={composerContext}
+        onCancelContext={() => setComposerContext(null)}
+      />
+
+      {menuFor && (
+        <MessageMenu
+          message={menuFor}
+          mine={menuFor.senderId === user?.uid}
+          onReply={() => replyTo(menuFor)}
+          onEdit={() =>
+            menuFor.text !== null &&
+            setComposerContext({ kind: 'edit', id: menuFor.id, text: menuFor.text })
+          }
+          onDelete={() => deleteForEveryone(menuFor.id)}
+          onDeleteForMe={() => deleteForMe(menuFor.id)}
+          onClose={() => setMenuFor(null)}
+        />
+      )}
+
+      {infoOpen && peer && (
+        <ChatInfoSheet peer={peer} presence={presence} onClose={() => setInfoOpen(false)} />
       )}
     </div>
   );

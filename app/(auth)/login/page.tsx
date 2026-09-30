@@ -7,6 +7,7 @@ import { auth, googleProvider } from '@/lib/firebase/client';
 import { useSession } from '@/lib/store/session';
 import { Button } from '@/components/ui/Button';
 import { Splash } from '@/components/Splash';
+import { returnPath } from '@/lib/returnTo';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,7 +16,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (status === 'ready') router.replace('/chats');
+    if (status === 'ready') router.replace(returnPath());
     if (status === 'needsProfile') router.replace('/onboarding');
     if (status === 'locked') router.replace('/unlock');
   }, [status, router]);

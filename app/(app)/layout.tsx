@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
 import { Splash } from '@/components/Splash';
 import { InstallCoach } from '@/components/InstallCoach';
+import { clearReturnTo, rememberReturnTo } from '@/lib/returnTo';
 
 /**
  * The gate. Nothing inside renders until the account AND this device's key
@@ -12,13 +13,19 @@ import { InstallCoach } from '@/components/InstallCoach';
  */
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const status = useSession((state) => state.status);
 
   useEffect(() => {
+    // Deep links (a shared profile, a chat) should survive the detour
+    // through sign-in, and be forgotten once we are back inside.
+    if (status === 'ready') clearReturnTo();
+    else if (status !== 'loading' && pathname !== '/chats') rememberReturnTo(pathname);
+
     if (status === 'signedOut') router.replace('/login');
     if (status === 'needsProfile') router.replace('/onboarding');
     if (status === 'locked') router.replace('/unlock');
-  }, [status, router]);
+  }, [status, router, pathname]);
 
   if (status !== 'ready') {
     return <Splash label={status === 'locked' ? 'Unlocking' : 'Loading'} />;

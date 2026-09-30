@@ -1,37 +1,61 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { safetyNumber } from '@/lib/crypto/safetyNumber';
-import { fromB64 } from '@/lib/crypto/codec';
 import { Avatar } from '@/components/ui/Avatar';
-import type { Identity } from '@/lib/crypto/types';
+import { getPhone } from '@/lib/db/users';
+import { lastSeenLabel } from '@/lib/format';
+import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
 
-/**
- * Peer detail and the safety number.
- *
- * Zing hands out public keys through Firestore, so in principle a compromised
- * server could substitute its own and sit in the middle. Comparing these 60
- * digits out of band -- in person, or over a call -- is what rules that out.
- * Without this screen the encryption is only as trustworthy as the server we
- * spent the whole app not trusting.
- */
+/** The other person's profile, opened by tapping their name in a chat. */
 export function ChatInfoSheet({
   peer,
-  identity,
+  presence,
   onClose,
 }: {
   peer: UserDoc;
-  identity: Identity;
+  presence: Presence;
   onClose: () => void;
 }) {
-  const [digits, setDigits] = useState<string | null>(null);
+  const joined = peer.createdAt?.toDate?.();
 
+  // Readable because we share a chat with them; the rules deny it otherwise.
+  const [phone, setPhone] = useState<string | null>(null);
   useEffect(() => {
-    void fromB64(peer.publicKey)
-      .then((peerKey) => safetyNumber(identity.publicKey, peerKey))
-      .then(setDigits);
-  }, [peer.publicKey, identity.publicKey]);
+    let live = true;
+    void getPhone(peer.uid).then((number) => {
+      if (live) setPhone(number);
+    });
+    return () => {
+      live = false;
+    };
+  }, [peer.uid]);
+
+  const [shareState, setShareState] = useState<'idle' | 'copied'>('idle');
+
+  // The link carries only the @username, which is already public. Whoever
+  // opens it gets the profile and a Message button, not the phone number.
+  async function share() {
+    const url = `${window.location.origin}/u/${peer.username}`;
+    const text = `Chat with ${peer.displayName} (@${peer.username}) on Zing`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: peer.displayName, text, url });
+      } catch {
+        // Dismissed the share sheet; nothing to do.
+      }
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(`${text}: ${url}`);
+      setShareState('copied');
+      setTimeout(() => setShareState('idle'), 2000);
+    } catch {
+      // Clipboard blocked too; nothing more we can do without a share target.
+    }
+  }
 
   return (
     <div
@@ -40,46 +64,93 @@ export function ChatInfoSheet({
     >
       <div
         role="dialog"
-        aria-label="Chat info"
+        aria-label={`${peer.displayName}'s profile`}
         onClick={(event) => event.stopPropagation()}
         className="w-full max-w-md space-y-5 rounded-t-3xl border-t border-line bg-surface
-          p-6 pb-safe md:rounded-3xl md:border"
+          p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
       >
         <div className="flex flex-col items-center gap-3 text-center">
-          <Avatar name={peer.displayName} photoURL={peer.photoURL} size={80} />
+          <Avatar
+            name={peer.displayName}
+            photoURL={peer.photoURL}
+            size={96}
+            online={presence.online}
+          />
           <div>
-            <p className="text-lg font-semibold">{peer.displayName}</p>
+            <p className="text-xl font-semibold">{peer.displayName}</p>
             <p className="text-[14px] text-muted">@{peer.username}</p>
+            <p className={`mt-1 text-[13px] ${presence.online ? 'text-zing' : 'text-faint'}`}>
+              {lastSeenLabel(presence)}
+            </p>
           </div>
-          {peer.about && <p className="text-[13px] text-muted">{peer.about}</p>}
         </div>
 
-        <div className="space-y-3 rounded-2xl border border-line bg-void p-4">
-          <p className="text-[13px] font-medium text-ink">Safety number</p>
+        <dl className="divide-y divide-line rounded-2xl border border-line bg-void">
+          <div className="px-4 py-3">
+            <dt className="text-[12px] text-muted">About</dt>
+            <dd className="mt-0.5 text-[15px] break-words text-ink">
+              {peer.about?.trim() || <span className="text-faint">Nothing here yet</span>}
+            </dd>
+          </div>
 
-          {digits ? (
-            <p className="grid grid-cols-4 gap-x-3 gap-y-1 font-mono text-[13px] text-muted">
-              {digits.split(' ').map((group, index) => (
-                <span key={index}>{group}</span>
-              ))}
-            </p>
-          ) : (
-            <p className="font-mono text-[13px] text-faint">calculating…</p>
+          {phone && (
+            <div className="px-4 py-3">
+              <dt className="text-[12px] text-muted">Phone</dt>
+              <dd className="mt-0.5 text-[15px]">
+                <a href={`tel:${phone}`} className="text-zing">
+                  {phone}
+                </a>
+              </dd>
+            </div>
           )}
 
-          <p className="text-[12px] leading-relaxed text-faint">
-            Compare these digits with {peer.displayName} in person or on a call. If they match, no
-            one is intercepting this conversation. If they ever change without a new device being
-            set up, stop and ask why.
-          </p>
-        </div>
+          {joined && (
+            <div className="px-4 py-3">
+              <dt className="text-[12px] text-muted">On Zing since</dt>
+              <dd className="mt-0.5 text-[15px] text-ink">
+                {joined.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+              </dd>
+            </div>
+          )}
+        </dl>
 
-        <button
-          onClick={onClose}
-          className="h-12 w-full rounded-2xl bg-elevated text-[15px] font-semibold text-ink"
-        >
-          Close
-        </button>
+        <p className="flex items-center justify-center gap-1.5 text-[12px] text-faint">
+          <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
+            <path
+              d="M4 7V5a4 4 0 0 1 8 0v2m-9 0h10v7H3z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+            />
+          </svg>
+          Messages are end-to-end encrypted
+        </p>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => void share()}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl bg-zing
+              text-[15px] font-semibold text-on-zing"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path
+                d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {shareState === 'copied' ? 'Link copied' : 'Share profile'}
+          </button>
+          <button
+            onClick={onClose}
+            className="h-12 flex-1 rounded-2xl bg-elevated text-[15px] font-semibold text-ink"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

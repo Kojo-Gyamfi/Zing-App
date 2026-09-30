@@ -40,10 +40,34 @@ export async function enablePush(uid: string): Promise<PushOutcome> {
       serviceWorkerRegistration: registration,
     });
 
-    if (token) await registerPushToken(uid, token);
+    // Installed apps call this on every launch; only write when the token or
+    // the account on this device has changed.
+    const registered = `${uid}:${token}`;
+    if (token && readRegistered() !== registered) {
+      await registerPushToken(uid, token);
+      writeRegistered(registered);
+    }
     return 'granted';
   } catch {
     return 'unsupported';
+  }
+}
+
+const REGISTERED = 'zing.push.registered';
+
+function readRegistered(): string | null {
+  try {
+    return localStorage.getItem(REGISTERED);
+  } catch {
+    return null;
+  }
+}
+
+function writeRegistered(value: string) {
+  try {
+    localStorage.setItem(REGISTERED, value);
+  } catch {
+    // Storage blocked: we just re-register next launch.
   }
 }
 
