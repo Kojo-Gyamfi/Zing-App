@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { connection } from 'next/server';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/Providers';
@@ -34,7 +35,12 @@ export const viewport: Viewport = {
   userScalable: true,
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Render per request: the CSP nonce from proxy.ts is only stamped onto
+  // scripts at request time, so a prerendered page would have its own
+  // scripts blocked.
+  await connection();
+
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable} h-full`}>
       <body className="min-h-full antialiased font-sans">

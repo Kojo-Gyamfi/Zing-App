@@ -10,12 +10,17 @@ export function MessageBubble({
   mine,
   tick,
   tailed,
+  onRetry,
+  onDiscard,
 }: {
   message: DecryptedMessage;
   mine: boolean;
   tick: TickState;
   /** Last in a run from the same sender -- only that one gets the tail corner. */
   tailed: boolean;
+  /** Only used for failed messages. */
+  onRetry?: () => void;
+  onDiscard?: () => void;
 }) {
   return (
     <motion.div
@@ -50,10 +55,22 @@ export function MessageBubble({
           <span className="break-words whitespace-pre-wrap">{message.text}</span>
         )}
 
-        <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-muted">
-          {bubbleTime(message.createdAt)}
-          {mine && <Ticks state={tick} />}
-        </span>
+        {message.failed ? (
+          <span className="mt-1 flex items-center justify-end gap-3 text-[12px]">
+            <span className="text-danger">Not sent</span>
+            <button onClick={onRetry} className="font-medium text-zing">
+              Retry
+            </button>
+            <button onClick={onDiscard} className="text-muted">
+              Delete
+            </button>
+          </span>
+        ) : (
+          <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-muted">
+            {bubbleTime(message.createdAt)}
+            {mine && <Ticks state={tick} />}
+          </span>
+        )}
       </div>
     </motion.div>
   );

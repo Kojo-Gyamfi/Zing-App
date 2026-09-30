@@ -22,30 +22,70 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/chats/$(chatId)).data.members;
     }
 
-    // Profiles are readable by any signed-in user: @username search and public
-    // key lookup both need it. keyBackup lives here too and is safe to expose --
-    // it is an Argon2id-wrapped blob, useless without the passphrase.
+    // Profiles are readable one at a time by any signed-in user: @username
+    // search and public key lookup both need it. keyBackup lives here too and
+    // is safe to expose -- it is an Argon2id-wrapped blob, useless without the
+    // passphrase. Listing is off: nobody needs to enumerate every user.
+    //
+    // Nothing private may live on this doc. The field allowlists below are what
+    // keep it that way; phone and push tokens go in private/account.
     match /users/{uid} {
-      allow read: if signedIn();
+      allow get: if signedIn();
+      allow list: if false;
 
+      // The profile and its username claim must land in the same transaction:
+      // getAfter() sees the claim only if it is written alongside, and it must
+      // name this user. Without this, a hand-rolled client could skip the claim
+      // and put someone else's @handle on its own profile.
       allow create: if isSelf(uid)
+                    && request.resource.data.keys().hasOnly([
+                         'uid', 'username', 'displayName', 'photoURL', 'about',
+                         'publicKey', 'keyBackup', 'createdAt'])
+                    && request.resource.data.uid == uid
                     && request.resource.data.username is string
-                    && request.resource.data.publicKey is string;
+                    && request.resource.data.publicKey is string
+                    && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.uid == uid;
 
       // Username and public key are identity anchors -- neither may drift after
-      // creation, or safety numbers and @handles stop meaning anything.
+      // creation, or safety numbers and @handles stop meaning anything. Only
+      // these fields may change at all.
       allow update: if isSelf(uid)
-                    && request.resource.data.username == resource.data.username
-                    && request.resource.data.publicKey == resource.data.publicKey;
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup']);
 
       allow delete: if false;
+
+      // Owner-only: phone number and push tokens. The push route reads this
+      // with admin credentials, which bypass rules.
+      match /private/{docId} {
+        allow read, write: if isSelf(uid);
+      }
     }
 
     // Username claims. Create-only, so a claim can never be stolen or reassigned.
+    // Each claim must be matched by the claimant's own profile in the same
+    // transaction, so one account cannot squat a pile of handles.
     match /usernames/{username} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow create: if signedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && username.matches('^[a-z0-9_]{3,20}$')
+                    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
       allow update, delete: if false;
+    }
+
+    // Phone number claims, for "find by phone". get works for someone who
+    // already knows the number; list does not, so the set cannot be dumped.
+    // A claim must match the number in the claimant's own private account doc,
+    // so each account holds at most one.
+    match /phones/{phone} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/private/account).data.phone == phone;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if false;
     }
 
     match /chats/{chatId} {
@@ -56,11 +96,21 @@ service cloud.firestore {
 
       // `list` is safe because the only query the app issues is constrained by
       // array-contains on the caller's own uid.
-      allow get, list: if isMember();
+      allow list: if isMember();
 
+      // ensureDirectChat reads the doc before creating it, so a get must also
+      // succeed when nothing is there yet -- resource is null then, and
+      // isMember() alone would deny. Chat ids are the two uids sorted and
+      // joined, so only the two people it would belong to may probe for it.
+      allow get: if isMember()
+                 || (signedIn() && resource == null && request.auth.uid in chatId.split('_'));
+
+      // The id must be the members' sorted uids, so a pair can never get a
+      // second conversation under some other id.
       allow create: if signedIn()
                     && request.auth.uid in request.resource.data.members
-                    && request.resource.data.members.size() == 2;
+                    && request.resource.data.members.size() == 2
+                    && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1];
 
       // lastMessage / updatedAt / lastRead may move; the member list may not.
       allow update: if isMember()

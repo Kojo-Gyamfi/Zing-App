@@ -33,7 +33,12 @@ export function Composer({
   }
 
   return (
-    <div className="flex items-end gap-2 border-t border-line bg-surface px-3 py-2 pb-safe">
+    // Bottom padding is whichever is larger: breathing room, or the home
+    // indicator inset on notched phones. pb-safe alone is 0 on most devices.
+    <div
+      className="flex items-end gap-2 border-t border-line bg-surface px-3 pt-2.5
+        pb-[max(0.875rem,env(safe-area-inset-bottom))]"
+    >
       <textarea
         ref={box}
         rows={1}

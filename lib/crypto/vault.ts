@@ -46,6 +46,11 @@ function database() {
 export async function saveIdentity(privateKey: Uint8Array): Promise<void> {
   const instance = await database();
   await instance.put(STORE, privateKey, RECORD);
+
+  // Without this, Chrome and Firefox may evict the key under storage pressure
+  // and bounce the user to /unlock. Best-effort: browsers may decline, and it
+  // does not override Safari's 7-day rule for uninstalled sites.
+  void navigator.storage?.persist?.().catch(() => false);
 }
 
 /** Null means this device has no key yet -- send the user to /unlock. */

@@ -7,7 +7,14 @@ import { generateIdentity } from '@/lib/crypto/identity';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
 import { saveIdentity } from '@/lib/crypto/vault';
 import { toB64 } from '@/lib/crypto/codec';
-import { createProfile, findByUsername, normalizeUsername, USERNAME_PATTERN, getUser } from '@/lib/db/users';
+import {
+  createProfile,
+  findByUsername,
+  findByPhone,
+  normalizeUsername,
+  USERNAME_PATTERN,
+  getUser,
+} from '@/lib/db/users';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
@@ -26,6 +33,7 @@ export default function OnboardingPage() {
   const [understood, setUnderstood] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   useEffect(() => {
     if (status === 'signedOut') router.replace('/login');
@@ -39,6 +47,7 @@ export default function OnboardingPage() {
 
   async function continueToPassphrase() {
     setError(null);
+    setPhoneError(null);
 
     if (!USERNAME_PATTERN.test(handle)) {
       setError('3–20 characters, using letters, numbers or underscores.');
@@ -48,6 +57,11 @@ export default function OnboardingPage() {
     setBusy(true);
     if (await findByUsername(handle)) {
       setError('That username is taken.');
+      setBusy(false);
+      return;
+    }
+    if (phone.trim() && (await findByPhone(phone))) {
+      setPhoneError('That number is already linked to another account.');
       setBusy(false);
       return;
     }
@@ -81,7 +95,7 @@ export default function OnboardingPage() {
         photoURL: user!.photoURL ?? null,
         publicKey: await toB64(identity.publicKey),
         keyBackup,
-        phone: phone.trim() ? phone.replace(/[\s-]/g, '') : null,
+        phone: phone.trim() || null,
       });
 
       await saveIdentity(identity.privateKey);
@@ -90,10 +104,13 @@ export default function OnboardingPage() {
       if (profile) setIdentity(identity, profile);
       router.replace('/chats');
     } catch (cause) {
+      const code = (cause as Error).message;
       setError(
-        (cause as Error).message === 'USERNAME_TAKEN'
+        code === 'USERNAME_TAKEN'
           ? 'Someone just took that username. Pick another.'
-          : 'Something went wrong setting up your account.',
+          : code === 'PHONE_TAKEN'
+            ? 'That phone number is already linked to another account.'
+            : 'Something went wrong setting up your account.',
       );
       setBusy(false);
     }
@@ -134,6 +151,7 @@ export default function OnboardingPage() {
             onChange={(event) => setPhone(event.target.value)}
             placeholder="+233 …"
             inputMode="tel"
+            error={phoneError}
           />
 
           <Button onClick={continueToPassphrase} busy={busy} className="mt-auto mb-8 w-full">

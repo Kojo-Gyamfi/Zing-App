@@ -50,14 +50,17 @@ export async function POST(request: Request) {
 
   const [sender, ...recipients] = await Promise.all([
     adminDb().doc(`users/${senderUid}`).get(),
-    ...members.filter((uid) => uid !== senderUid).map((uid) => adminDb().doc(`users/${uid}`).get()),
+    ...members
+      .filter((uid) => uid !== senderUid)
+      .map((uid) => adminDb().doc(`users/${uid}/private/account`).get()),
   ]);
 
   const senderName = (sender.data()?.displayName as string) ?? 'Someone';
 
   const targets = recipients.flatMap((doc) => {
     const tokens = (doc.data()?.pushTokens ?? []) as string[];
-    return tokens.map((token) => ({ uid: doc.id, token }));
+    // doc is users/{uid}/private/account, so the uid is two levels up.
+    return tokens.map((token) => ({ uid: doc.ref.parent.parent!.id, token }));
   });
 
   if (targets.length === 0) {
@@ -88,7 +91,7 @@ export async function POST(request: Request) {
   await Promise.all(
     [...stale].map(([uid, tokens]) =>
       adminDb()
-        .doc(`users/${uid}`)
+        .doc(`users/${uid}/private/account`)
         .update({ pushTokens: FieldValue.arrayRemove(...tokens) }),
     ),
   );

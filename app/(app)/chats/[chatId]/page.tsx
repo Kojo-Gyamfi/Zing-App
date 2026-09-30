@@ -34,6 +34,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     loading,
     conversationKey,
     sendText,
+    retry,
+    discard,
     ping,
     loadOlder,
     exhausted,
@@ -136,6 +138,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
                     message={message}
                     mine={mine}
                     tailed={!next || next.senderId !== message.senderId}
+                    onRetry={() => retry(message.id)}
+                    onDiscard={() => discard(message.id)}
                     tick={tickState({
                       pending: message.pending,
                       createdAt: message.createdAt,

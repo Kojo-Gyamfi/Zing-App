@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@/lib/store/session';
 import { keyFingerprint } from '@/lib/crypto/safetyNumber';
-import { updateProfile } from '@/lib/db/users';
+import { getAccount, setPhone as savePhone, updateProfile } from '@/lib/db/users';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
@@ -14,7 +14,8 @@ export default function SettingsPage() {
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
-  const [phone, setPhone] = useState(profile?.phone ?? '');
+  const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [fingerprint, setFingerprint] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -24,15 +25,34 @@ export default function SettingsPage() {
     if (identity) void keyFingerprint(identity.publicKey).then(setFingerprint);
   }, [identity]);
 
+  // The number lives in the owner-only account doc, not the public profile.
+  const uid = profile?.uid;
+  useEffect(() => {
+    if (!uid) return;
+    void getAccount(uid).then((account) => setPhone(account?.phone ?? ''));
+  }, [uid]);
+
   async function save() {
     if (!profile) return;
 
     setSaving(true);
+    setPhoneError(null);
     await updateProfile(profile.uid, {
       displayName: displayName.trim() || profile.displayName,
       about: about.trim(),
-      phone: phone.trim() ? phone.replace(/[\s-]/g, '') : null,
     });
+
+    try {
+      await savePhone(profile.uid, phone);
+    } catch (cause) {
+      setPhoneError(
+        (cause as Error).message === 'PHONE_TAKEN'
+          ? 'That number is already linked to another account.'
+          : 'Could not save your phone number.',
+      );
+      setSaving(false);
+      return;
+    }
     await refreshProfile();
 
     setSaving(false);
@@ -87,6 +107,7 @@ export default function SettingsPage() {
             value={phone}
             onChange={(event) => setPhone(event.target.value)}
             inputMode="tel"
+            error={phoneError}
           />
 
           <div className="flex items-center gap-3">

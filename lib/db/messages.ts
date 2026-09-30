@@ -29,6 +29,11 @@ export const PAGE_SIZE = 30;
  * We do not await the commit before returning: Firestore's local cache fires
  * the snapshot listener immediately, so the bubble is on screen before the
  * write leaves the device. Offline, it simply queues and flushes on reconnect.
+ *
+ * `committed` settles once the server has answered. It stays pending while
+ * offline and only rejects when the write is refused -- at which point the
+ * local copy is rolled back and the caller must show the message as failed,
+ * or it silently disappears.
  */
 export async function sendMessage(params: {
   chatId: string;
@@ -36,7 +41,7 @@ export async function sendMessage(params: {
   text: string;
   conversationKey: Uint8Array;
   replyTo?: string | null;
-}): Promise<{ id: string; envelope: Envelope }> {
+}): Promise<{ id: string; envelope: Envelope; committed: Promise<void> }> {
   const envelope = await seal(params.text, params.conversationKey);
 
   const messageRef = doc(collection(db(), 'chats', params.chatId, 'messages'));
@@ -60,11 +65,7 @@ export async function sendMessage(params: {
     updatedAt: serverTimestamp(),
   });
 
-  // Errors surface through the listener's error channel rather than blocking
-  // the optimistic render.
-  void batch.commit();
-
-  return { id: messageRef.id, envelope };
+  return { id: messageRef.id, envelope, committed: batch.commit() };
 }
 
 async function decrypt(

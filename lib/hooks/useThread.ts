@@ -36,6 +36,7 @@ export function useThread(chatId: string, peerUid: string | null) {
   const [exhausted, setExhausted] = useState(false);
   const [peerReadAt, setPeerReadAt] = useState<Date | null>(null);
   const [peerDeliveredAt, setPeerDeliveredAt] = useState<Date | null>(null);
+  const [failed, setFailed] = useState<(DecryptedMessage & { chatId: string })[]>([]);
 
   const lastTypingPing = useRef(0);
 
@@ -78,10 +79,16 @@ export function useThread(chatId: string, peerUid: string | null) {
   useEffect(() => {
     if (!conversationKey) return;
 
-    const unsubscribe = subscribeMessages(chatId, conversationKey, (next) => {
-      setMessages(next);
-      setLoading(false);
-    });
+    const unsubscribe = subscribeMessages(
+      chatId,
+      conversationKey,
+      (next) => {
+        setMessages(next);
+        setLoading(false);
+      },
+      // A refused listener would otherwise leave the thread on its spinner.
+      () => setLoading(false),
+    );
 
     return unsubscribe;
   }, [chatId, conversationKey]);
@@ -100,18 +107,53 @@ export function useThread(chatId: string, peerUid: string | null) {
       setTyping(chatId, user.uid, false);
       lastTypingPing.current = 0;
 
-      const { envelope } = await send({
+      const sentAt = new Date();
+      const { id, envelope, committed } = await send({
         chatId,
         senderId: user.uid,
         text: text.trim(),
         conversationKey,
       });
 
-      // Fire and forget: the message is already on screen and on its way.
-      void notifyPeers(chatId, envelope);
+      committed.then(
+        // Push only once the server has the message, so nobody is buzzed for
+        // one that never landed. Offline, this waits for the reconnect.
+        () => void notifyPeers(chatId, envelope),
+        // Firestore has already rolled the local copy back; without this the
+        // bubble would just vanish.
+        () =>
+          setFailed((current) => [
+            ...current,
+            {
+              chatId,
+              id,
+              senderId: user.uid,
+              text: text.trim(),
+              createdAt: sentAt,
+              replyTo: null,
+              pending: false,
+              failed: true,
+            },
+          ]),
+      );
     },
     [chatId, user, conversationKey],
   );
+
+  const retry = useCallback(
+    (id: string) => {
+      const message = failed.find((entry) => entry.id === id);
+      if (!message?.text) return;
+
+      setFailed((current) => current.filter((entry) => entry.id !== id));
+      void sendText(message.text);
+    },
+    [failed, sendText],
+  );
+
+  const discard = useCallback((id: string) => {
+    setFailed((current) => current.filter((entry) => entry.id !== id));
+  }, []);
 
   /** Throttled: one RTDB write every couple of seconds, not one per keystroke. */
   const ping = useCallback(() => {
@@ -141,8 +183,20 @@ export function useThread(chatId: string, peerUid: string | null) {
     };
   }, [chatId, user]);
 
+  const thread = [...older, ...messages];
+  const failedHere = failed.filter(
+    (entry) => entry.chatId === chatId && !thread.some((message) => message.id === entry.id),
+  );
+
   return {
-    messages: [...older, ...messages],
+    messages: failedHere.length
+      ? [...thread, ...failedHere].sort(
+          // Unstamped messages are still in flight, so they belong at the end.
+          (a, b) =>
+            (a.createdAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+            (b.createdAt?.getTime() ?? Number.MAX_SAFE_INTEGER),
+        )
+      : thread,
     peer,
     presence,
     peerTyping,
@@ -152,6 +206,8 @@ export function useThread(chatId: string, peerUid: string | null) {
     /** Null after loading means the peer has not written our key copy yet. */
     conversationKey,
     sendText,
+    retry,
+    discard,
     ping,
     loadOlder,
     exhausted,

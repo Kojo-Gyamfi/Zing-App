@@ -17,9 +17,17 @@ export type UserDoc = {
   about: string;
   publicKey: string;     // base64 X25519
   keyBackup: KeyBackup;  // Argon2id-wrapped private key; useless without the passphrase
-  phone: string | null;  // optional, discovery only
-  pushTokens: string[];
   createdAt: Timestamp;
+};
+
+/** users/{uid}/private/account -- readable by its owner and the push route only. */
+export type AccountDoc = {
+  phone: string | null;  // optional, discovery only; mirrored as a phones/{phone} claim
+  pushTokens: string[];
+};
+
+export type PhoneDoc = {
+  uid: string;
 };
 
 export type UsernameDoc = {
@@ -64,4 +72,6 @@ export type DecryptedMessage = {
   replyTo: string | null;
   /** True while the write is still in flight -- drives the clock icon. */
   pending: boolean;
+  /** The server refused the write. Held in memory only, so it can be retried. */
+  failed?: boolean;
 };
