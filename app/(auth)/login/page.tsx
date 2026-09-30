@@ -44,7 +44,7 @@ export default function LoginPage() {
     <main className="flex min-h-dvh flex-col justify-between bg-void px-6 pt-safe pb-safe">
       <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/zing-logo.png" alt="" className="size-40" />
+        <img src="/zing-logo.png" alt="" className="size-40 rounded-[36px]" />
 
         <div className="space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Zing</h1>
