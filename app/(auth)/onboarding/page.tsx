@@ -19,12 +19,16 @@ import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
 import { returnPath } from '@/lib/returnTo';
+import { clearLoginIntent, getLoginIntent } from '@/lib/loginIntent';
 
 const MIN_PASSPHRASE = 10;
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { status, user, setIdentity } = useSession();
+  const { status, user, setIdentity, signOut } = useSession();
+  // Read once. Only rendered after the session loads, so the server's null
+  // never has to match the client's value during hydration.
+  const [expectedAccount] = useState(() => getLoginIntent() === 'signin');
 
   const [step, setStep] = useState<'handle' | 'passphrase'>('handle');
   const [username, setUsername] = useState('');
@@ -103,6 +107,7 @@ export default function OnboardingPage() {
 
       const profile = await getUser(user!.uid);
       if (profile) setIdentity(identity, profile);
+      clearLoginIntent();
       router.replace(returnPath());
     } catch (cause) {
       const code = (cause as Error).message;
@@ -132,6 +137,26 @@ export default function OnboardingPage() {
 
       {step === 'handle' ? (
         <div className="flex flex-1 flex-col gap-5">
+          {expectedAccount && (
+            <div className="rounded-2xl border border-line bg-surface p-4">
+              <p className="text-[14px] font-medium text-ink">No Zing account found</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-muted">
+                {user.email ?? 'This Google account'} isn&apos;t linked to a Zing account yet. If
+                you signed up with a different Google account, switch to it. Otherwise, set one
+                up below.
+              </p>
+              <button
+                onClick={() => {
+                  clearLoginIntent();
+                  void signOut();
+                }}
+                className="mt-3 text-[13px] font-medium text-zing"
+              >
+                Use a different Google account
+              </button>
+            </div>
+          )}
+
           <Field
             label="Username"
             prefix="@"

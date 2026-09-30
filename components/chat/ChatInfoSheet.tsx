@@ -20,16 +20,20 @@ export function ChatInfoSheet({
   const joined = peer.createdAt?.toDate?.();
 
   // Readable because we share a chat with them; the rules deny it otherwise.
-  const [phone, setPhone] = useState<string | null>(null);
+  // undefined while loading, so the row does not flash "No number" first.
+  const [phone, setPhone] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     void getPhone(peer.uid).then((number) => {
-      if (live) setPhone(number);
+      // Accounts that have not opened Zing since the privacy change still keep
+      // the number on their public profile; it is already visible there.
+      const legacy = (peer as UserDoc & { phone?: string | null }).phone ?? null;
+      if (live) setPhone(number ?? legacy);
     });
     return () => {
       live = false;
     };
-  }, [peer.uid]);
+  }, [peer]);
 
   const [shareState, setShareState] = useState<'idle' | 'copied'>('idle');
 
@@ -93,16 +97,20 @@ export function ChatInfoSheet({
             </dd>
           </div>
 
-          {phone && (
-            <div className="px-4 py-3">
-              <dt className="text-[12px] text-muted">Phone</dt>
-              <dd className="mt-0.5 text-[15px]">
+          <div className="px-4 py-3">
+            <dt className="text-[12px] text-muted">Phone</dt>
+            <dd className="mt-0.5 text-[15px]">
+              {phone === undefined ? (
+                <span className="text-faint">Loading…</span>
+              ) : phone ? (
                 <a href={`tel:${phone}`} className="text-zing">
                   {phone}
                 </a>
-              </dd>
-            </div>
-          )}
+              ) : (
+                <span className="text-faint">No number added</span>
+              )}
+            </dd>
+          </div>
 
           {joined && (
             <div className="px-4 py-3">

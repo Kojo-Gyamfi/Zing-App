@@ -160,6 +160,51 @@ export async function setPhone(uid: string, raw: string): Promise<void> {
   });
 }
 
+/**
+ * One-time move for accounts created before phone numbers left the public
+ * profile. Those have \`phone\` (and \`pushTokens\`) on users/{uid}, readable by
+ * every signed-in user, or a phone in the owner-only account doc, readable by
+ * nobody else -- so their chat partners could not see it. This puts the number
+ * in shared/contact, claims it for find-by-phone, and strips the old fields.
+ */
+export async function migrateLegacyContact(uid: string): Promise<void> {
+  await runTransaction(db(), async (transaction) => {
+    const userRef = doc(db(), 'users', uid);
+    const profile = await transaction.get(userRef);
+    const account = await transaction.get(accountRef(uid));
+    const contact = await transaction.get(contactRef(uid));
+
+    const onProfile = profile.data() ?? {};
+    const legacyPhone =
+      (onProfile.phone as string | null | undefined) ??
+      (account.data()?.phone as string | null | undefined) ??
+      null;
+    const hasLegacyFields = 'phone' in onProfile || 'pushTokens' in onProfile;
+    const hasLegacyAccountPhone = account.exists() && 'phone' in (account.data() ?? {});
+
+    if (contact.exists() && !hasLegacyFields && !hasLegacyAccountPhone) return;
+
+    const phone = (contact.data()?.phone as string | null | undefined) ?? legacyPhone;
+
+    // Claim the number unless someone else already holds it; in that case the
+    // number still shows to chat partners, it just is not searchable.
+    let claim = false;
+    if (phone) {
+      const existing = await transaction.get(phoneRef(phone));
+      claim = !existing.exists();
+    }
+
+    transaction.set(contactRef(uid), { phone } satisfies ContactDoc);
+    if (claim && phone) transaction.set(phoneRef(phone), { uid });
+    if (hasLegacyFields) {
+      transaction.update(userRef, { phone: deleteField(), pushTokens: deleteField() });
+    }
+    if (hasLegacyAccountPhone) {
+      transaction.set(accountRef(uid), { phone: deleteField() }, { merge: true });
+    }
+  });
+}
+
 export async function registerPushToken(uid: string, token: string): Promise<void> {
   await setDoc(accountRef(uid), { pushTokens: arrayUnion(token) }, { merge: true });
 }

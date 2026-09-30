@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { onAuthStateChanged, signOut as firebaseSignOut, type User } from 'firebase/auth';
 import { auth } from '@/lib/firebase/client';
-import { getUser } from '@/lib/db/users';
+import { getUser, migrateLegacyContact } from '@/lib/db/users';
 import { loadIdentity, clearIdentity } from '@/lib/crypto/vault';
 import { publicKeyFrom } from '@/lib/crypto/identity';
 import { toB64 } from '@/lib/crypto/codec';
@@ -40,6 +40,32 @@ type SessionState = {
   setIdentity: (identity: Identity, profile: UserDoc) => void;
   signOut: () => Promise<void>;
 };
+
+/**
+ * Moves an early account's phone number out of its public profile (see
+ * migrateLegacyContact). Once per account per device: after that it is a no-op
+ * that would still cost three reads every launch.
+ */
+function migrateOnce(uid: string) {
+  const flag = `zing.contact.migrated.${uid}`;
+  try {
+    if (localStorage.getItem(flag)) return;
+  } catch {
+    // No storage: run it; the transaction exits early when there is nothing to do.
+  }
+
+  void migrateLegacyContact(uid)
+    .then(() => {
+      try {
+        localStorage.setItem(flag, '1');
+      } catch {
+        // Runs again next launch; harmless.
+      }
+    })
+    .catch(() => {
+      // Offline or over quota: try again next launch.
+    });
+}
 
 export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
@@ -82,6 +108,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
       stopPresence = trackPresence(user.uid);
       set({ status: 'ready', user, profile, identity });
+      migrateOnce(user.uid);
     });
 
     return () => {
@@ -98,7 +125,10 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setIdentity: (identity, profile) => {
     const { user } = get();
-    if (user) trackPresence(user.uid);
+    if (user) {
+      trackPresence(user.uid);
+      migrateOnce(user.uid);
+    }
     set({ status: 'ready', identity, profile });
   },
 

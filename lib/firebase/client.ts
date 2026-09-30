@@ -56,3 +56,7 @@ export function rtdb(): Database {
 }
 
 export const googleProvider = new GoogleAuthProvider();
+// Always show Google's account chooser. Without it, signing back in after a
+// sign-out silently reuses the last Google account, with no way to pick
+// another one.
+googleProvider.setCustomParameters({ prompt: 'select_account' });

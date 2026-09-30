@@ -8,11 +8,12 @@ import { useSession } from '@/lib/store/session';
 import { Button } from '@/components/ui/Button';
 import { Splash } from '@/components/Splash';
 import { returnPath } from '@/lib/returnTo';
+import { setLoginIntent, type LoginIntent } from '@/lib/loginIntent';
 
 export default function LoginPage() {
   const router = useRouter();
   const status = useSession((state) => state.status);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<LoginIntent | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -23,9 +24,10 @@ export default function LoginPage() {
 
   if (status === 'loading') return <Splash />;
 
-  async function signIn() {
-    setBusy(true);
+  async function signIn(intent: LoginIntent) {
+    setBusy(intent);
     setError(null);
+    setLoginIntent(intent);
     try {
       await signInWithPopup(auth(), googleProvider);
     } catch (cause) {
@@ -36,8 +38,11 @@ export default function LoginPage() {
         await signInWithRedirect(auth(), googleProvider);
         return;
       }
-      setError('Could not sign in. Check your connection and try again.');
-      setBusy(false);
+      // Closing Google's window is not an error worth shouting about.
+      if (!code.includes('cancelled') && !code.includes('closed-by-user')) {
+        setError('Could not sign in. Check your connection and try again.');
+      }
+      setBusy(null);
     }
   }
 
@@ -60,12 +65,28 @@ export default function LoginPage() {
       <div className="space-y-4 pb-8">
         {error && <p className="text-center text-[13px] text-danger">{error}</p>}
 
-        <Button onClick={signIn} busy={busy} className="w-full">
-          Continue with Google
+        <Button
+          onClick={() => signIn('signup')}
+          busy={busy === 'signup'}
+          disabled={busy !== null}
+          className="w-full"
+        >
+          Create an account
+        </Button>
+
+        <Button
+          variant="ghost"
+          onClick={() => signIn('signin')}
+          busy={busy === 'signin'}
+          disabled={busy !== null}
+          className="w-full border border-line"
+        >
+          I already have an account
         </Button>
 
         <p className="text-center text-[12px] leading-relaxed text-faint">
-          You&apos;ll pick a username and a recovery passphrase next.
+          Both continue with Google. Signing back in? Pick the same Google account and enter your
+          recovery passphrase to unlock your messages.
         </p>
       </div>
     </main>

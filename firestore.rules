@@ -58,9 +58,17 @@ service cloud.firestore {
       // Username and public key are identity anchors -- neither may drift after
       // creation, or safety numbers and @handles stop meaning anything. Only
       // these fields may change at all.
+      //
+      // phone and pushTokens may only be touched to remove them: early
+      // accounts stored both here, where anyone signed in could read them, and
+      // migrateLegacyContact moves them out.
       allow update: if isSelf(uid)
                     && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup']);
+                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup', 'phone', 'pushTokens'])
+                    && (
+                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['phone', 'pushTokens'])
+                      || !request.resource.data.keys().hasAny(['phone', 'pushTokens'])
+                    );
 
       allow delete: if false;
 
