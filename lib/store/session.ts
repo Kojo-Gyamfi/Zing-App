@@ -41,13 +41,17 @@ type SessionState = {
   signOut: () => Promise<void>;
 };
 
+/** Set when migrateLegacyContact had to drop a number; Settings asks for it again. */
+export const phoneDroppedFlag = (uid: string) => `zing.phone.dropped.${uid}`;
+
 /**
- * Moves an early account's phone number out of its public profile (see
- * migrateLegacyContact). Once per account per device: after that it is a no-op
- * that would still cost three reads every launch.
+ * Moves an early account's phone number out of its public profile and into
+ * canonical form (see migrateLegacyContact). Once per account per device:
+ * after that it is a no-op that would still cost several reads every launch.
+ * The v2 flag re-runs it for accounts that took the first, pre-E.164 version.
  */
 function migrateOnce(uid: string) {
-  const flag = `zing.contact.migrated.${uid}`;
+  const flag = `zing.contact.migrated.v2.${uid}`;
   try {
     if (localStorage.getItem(flag)) return;
   } catch {
@@ -55,9 +59,10 @@ function migrateOnce(uid: string) {
   }
 
   void migrateLegacyContact(uid)
-    .then(() => {
+    .then((dropped) => {
       try {
         localStorage.setItem(flag, '1');
+        if (dropped) localStorage.setItem(phoneDroppedFlag(uid), '1');
       } catch {
         // Runs again next launch; harmless.
       }

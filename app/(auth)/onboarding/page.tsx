@@ -22,9 +22,11 @@ import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
 import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 import { returnPath } from '@/lib/returnTo';
+import { limitPhoneInput, tryNormalizePhone } from '@/lib/phone';
 import { clearLoginIntent, getLoginIntent } from '@/lib/loginIntent';
 
 const MIN_PASSPHRASE = 10;
+const PHONE_INVALID_MESSAGE = 'That doesn’t look like a valid phone number (up to 10 digits).';
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -70,6 +72,11 @@ export default function OnboardingPage() {
     setBusy(true);
     if (await findByUsername(handle)) {
       setError('That username is taken.');
+      setBusy(false);
+      return;
+    }
+    if (phone.trim() && !tryNormalizePhone(phone)) {
+      setPhoneError(PHONE_INVALID_MESSAGE);
       setBusy(false);
       return;
     }
@@ -127,7 +134,9 @@ export default function OnboardingPage() {
           ? 'Someone just took that username. Pick another.'
           : code === 'PHONE_TAKEN'
             ? 'That phone number is already linked to another account.'
-            : 'Something went wrong setting up your account.',
+            : code === 'PHONE_INVALID'
+              ? PHONE_INVALID_MESSAGE
+              : 'Something went wrong setting up your account.',
       );
       setBusy(false);
     }
@@ -198,10 +207,10 @@ export default function OnboardingPage() {
 
           <Field
             label="Phone number"
-            hint="Optional. Lets friends find you, and people you chat with can see it. Nothing is sent to it."
+            hint="Optional. Lets friends find you, and people you chat with can see it. Not verified — nothing is sent to it."
             value={phone}
-            onChange={(event) => setPhone(event.target.value)}
-            placeholder="+233 …"
+            onChange={(event) => setPhone(limitPhoneInput(event.target.value))}
+            placeholder="024 123 4567"
             inputMode="tel"
             error={phoneError}
           />

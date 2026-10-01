@@ -11,6 +11,8 @@ import {
   updateKeyBackup,
   updateProfile,
 } from '@/lib/db/users';
+import { phoneDroppedFlag } from '@/lib/store/session';
+import { formatPhone, limitPhoneInput } from '@/lib/phone';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
@@ -26,7 +28,17 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
   const [phone, setPhone] = useState('');
-  const [phoneError, setPhoneError] = useState<string | null>(null);
+  // Only ever rendered client-side (the app layout waits for a ready session),
+  // so reading storage in the initializer cannot cause a hydration mismatch.
+  const [phoneError, setPhoneError] = useState<string | null>(() => {
+    try {
+      return profile && localStorage.getItem(phoneDroppedFlag(profile.uid))
+        ? 'Your number was removed while updating its format — it was invalid or another account already has it. Add it again if it is yours.'
+        : null;
+    } catch {
+      return null;
+    }
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -49,7 +61,7 @@ export default function SettingsPage() {
   const uid = profile?.uid;
   useEffect(() => {
     if (!uid) return;
-    void getPhone(uid, true).then((number) => setPhone(number ?? ''));
+    void getPhone(uid, true).then((number) => setPhone(number ? formatPhone(number) : ''));
     void getRecoveryBackup(uid)
       .then((doc) => setRecoveryCreated(doc ? (doc.createdAt?.toDate() ?? new Date()) : null))
       .catch(() => setRecoveryCreated(null));
@@ -122,11 +134,19 @@ export default function SettingsPage() {
 
     try {
       await savePhone(profile.uid, phone);
+      try {
+        localStorage.removeItem(phoneDroppedFlag(profile.uid));
+      } catch {
+        // Nothing to clear.
+      }
     } catch (cause) {
+      const code = (cause as Error).message;
       setPhoneError(
-        (cause as Error).message === 'PHONE_TAKEN'
+        code === 'PHONE_TAKEN'
           ? 'That number is already linked to another account.'
-          : 'Could not save your phone number.',
+          : code === 'PHONE_INVALID'
+            ? 'That doesn’t look like a valid phone number (up to 10 digits).'
+            : 'Could not save your phone number.',
       );
       setSaving(false);
       return;
@@ -181,9 +201,10 @@ export default function SettingsPage() {
           />
           <Field
             label="Phone number"
-            hint="Optional. Lets friends find you, and people you chat with can see it."
+            hint="Optional. Lets friends find you, and people you chat with can see it. Not verified."
             value={phone}
-            onChange={(event) => setPhone(event.target.value)}
+            onChange={(event) => setPhone(limitPhoneInput(event.target.value))}
+            placeholder="024 123 4567"
             inputMode="tel"
             error={phoneError}
           />

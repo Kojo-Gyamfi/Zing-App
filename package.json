@@ -17,6 +17,7 @@
     "firebase": "^12.18.0",
     "firebase-admin": "^14.3.0",
     "idb": "^8.0.3",
+    "libphonenumber-js": "^1.13.14",
     "libsodium-wrappers": "^0.8.4",
     "libsodium-wrappers-sumo": "^0.8.4",
     "motion": "^13.2.0",

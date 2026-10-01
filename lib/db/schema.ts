@@ -64,6 +64,11 @@ export type ChatDoc = {
   lastRead: Record<string, Timestamp>;
   /** Written by the recipient the moment a message reaches their device. */
   lastDelivered: Record<string, Timestamp>;
+  /**
+   * Messages each member has not opened yet: the sender adds one, the reader
+   * resets their own to zero. Absent on chats from before the badge existed.
+   */
+  unread?: Record<string, number>;
   createdAt: Timestamp;
 };
 

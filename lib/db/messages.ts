@@ -10,6 +10,7 @@ import {
   writeBatch,
   serverTimestamp,
   deleteField,
+  increment,
   setDoc,
   arrayUnion,
   type QueryDocumentSnapshot,
@@ -59,6 +60,9 @@ export async function sendMessage(params: {
     replyTo: params.replyTo ?? null,
   });
 
+  // Chat ids are the two uids sorted and joined, so the recipient needs no lookup.
+  const recipient = params.chatId.split('_').find((uid) => uid !== params.senderId);
+
   batch.update(doc(db(), 'chats', params.chatId), {
     lastMessage: {
       id: messageRef.id,
@@ -67,6 +71,8 @@ export async function sendMessage(params: {
       senderId: params.senderId,
     },
     updatedAt: serverTimestamp(),
+    // The recipient's unread badge. markRead puts it back to zero.
+    ...(recipient ? { [`unread.${recipient}`]: increment(1) } : {}),
   });
 
   return { id: messageRef.id, envelope, committed: batch.commit() };

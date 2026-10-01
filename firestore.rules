@@ -81,9 +81,19 @@ service cloud.firestore {
 
       // The phone number: shown on the profile of someone you already chat
       // with, never to arbitrary signed-in users.
+      //
+      // The contact doc may show only a number its owner has claimed, so
+      // nobody can display a number that belongs to someone else. getAfter()
+      // sees a claim written in the same transaction.
       match /shared/{docId} {
         allow read: if isSelf(uid) || sharesChatWith(uid);
-        allow write: if isSelf(uid);
+        allow delete: if isSelf(uid);
+        allow create, update: if isSelf(uid)
+                              && (docId != 'contact'
+                                  || request.resource.data.get('phone', null) == null
+                                  || (request.resource.data.phone is string
+                                      && request.resource.data.phone.matches('^[+][1-9][0-9]{6,14}$')
+                                      && getAfter(/databases/$(database)/documents/phones/$(request.resource.data.phone)).data.uid == uid));
       }
     }
 
@@ -102,11 +112,14 @@ service cloud.firestore {
     // Phone number claims, for "find by phone". get works for someone who
     // already knows the number; list does not, so the set cannot be dumped.
     // A claim must match the number in the claimant's own contact doc, so each
-    // account holds at most one.
+    // account holds at most one. Ids are E.164 (+233241234567), the one form
+    // lib/phone.ts writes, so a number cannot be claimed twice under two
+    // spellings.
     match /phones/{phone} {
       allow get: if signedIn();
       allow list: if false;
       allow create: if signedIn()
+                    && phone.matches('^[+][1-9][0-9]{6,14}$')
                     && request.resource.data.uid == request.auth.uid
                     && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/shared/contact).data.phone == phone;
       allow delete: if signedIn() && resource.data.uid == request.auth.uid;
@@ -137,9 +150,37 @@ service cloud.firestore {
                     && request.resource.data.members.size() == 2
                     && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1];
 
-      // lastMessage / updatedAt / lastRead may move; the member list may not.
+      // A member may write only their own receipt, and only as "now" -- the app
+      // always writes serverTimestamp(). Without this either member could mark
+      // the other as having read or received messages they never saw.
+      function ownReceiptOnly(field) {
+        let before = resource.data.get(field, {});
+        let after = request.resource.data.get(field, {});
+        let changed = after.diff(before).affectedKeys();
+        return changed.size() == 0
+               || (changed.hasOnly([request.auth.uid]) && after[request.auth.uid] == request.time);
+      }
+
+      // Unread badges: I may clear my own count, or add exactly one to the
+      // other member's when I send. Nothing else -- no inflating someone's
+      // badge by a thousand, no zeroing it for them.
+      function unreadChangeOk() {
+        let me = request.auth.uid;
+        let peer = resource.data.members[0] == me ? resource.data.members[1] : resource.data.members[0];
+        let before = resource.data.get('unread', {});
+        let after = request.resource.data.get('unread', {});
+        let changed = after.diff(before).affectedKeys();
+        return changed.hasOnly([me, peer])
+               && (!(me in changed) || after[me] == 0)
+               && (!(peer in changed) || after[peer] == before.get(peer, 0) + 1);
+      }
+
+      // lastMessage / updatedAt / receipts / unread may move; the member list may not.
       allow update: if isMember()
-                    && request.resource.data.members == resource.data.members;
+                    && request.resource.data.members == resource.data.members
+                    && ownReceiptOnly('lastRead')
+                    && ownReceiptOnly('lastDelivered')
+                    && unreadChangeOk();
 
       allow delete: if false;
 

@@ -104,7 +104,14 @@ export function ChatListPanel() {
                             : row.preview}
                         </span>
 
-                        {row.unread && <span className="size-2.5 shrink-0 rounded-full bg-zing" />}
+                        {row.unread && (
+                          <span
+                            aria-label={`${row.unreadCount} unread`}
+                            className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-zing px-1.5 text-[11px] leading-none font-semibold text-on-zing"
+                          >
+                            {row.unreadCount > 99 ? '99+' : row.unreadCount}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </Link>

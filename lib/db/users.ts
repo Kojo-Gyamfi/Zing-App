@@ -11,6 +11,7 @@ import {
 import { db } from '@/lib/firebase/client';
 import type { UserDoc, AccountDoc, ContactDoc, RecoveryDoc } from './schema';
 import type { KeyBackup } from '@/lib/crypto/types';
+import { normalizePhone, tryNormalizePhone } from '@/lib/phone';
 
 export async function getUser(uid: string): Promise<UserDoc | null> {
   const snapshot = await getDoc(doc(db(), 'users', uid));
@@ -22,11 +23,6 @@ export function normalizeUsername(raw: string): string {
 }
 
 export const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
-
-export function normalizePhone(raw: string): string | null {
-  const phone = raw.replace(/[\s-]/g, '');
-  return phone || null;
-}
 
 /**
  * The owner-only part of a profile: push tokens. users/{uid} is readable by
@@ -112,7 +108,7 @@ export async function findByUsername(raw: string): Promise<UserDoc | null> {
 
 /** Optional discovery path -- only finds people who chose to publish a number. */
 export async function findByPhone(raw: string): Promise<UserDoc | null> {
-  const phone = normalizePhone(raw);
+  const phone = tryNormalizePhone(raw);
   if (!phone) return null;
 
   const claim = await getDoc(phoneRef(phone));
@@ -171,40 +167,52 @@ export async function setPhone(uid: string, raw: string): Promise<void> {
 }
 
 /**
- * One-time move for accounts created before phone numbers left the public
- * profile. Those have \`phone\` (and \`pushTokens\`) on users/{uid}, readable by
- * every signed-in user, or a phone in the owner-only account doc, readable by
- * nobody else -- so their chat partners could not see it. This puts the number
- * in shared/contact, claims it for find-by-phone, and strips the old fields.
+ * One-time cleanup for older accounts, run once per device after unlock.
+ *
+ * Accounts created before phone numbers left the public profile have `phone`
+ * (and `pushTokens`) on users/{uid}, readable by every signed-in user, or a
+ * phone in the owner-only account doc. Accounts created before numbers were
+ * canonical hold "0241234567"-style spellings. This moves the number to
+ * shared/contact in E.164 form, re-claims it under that form, and strips the
+ * old fields and claim.
+ *
+ * Returns true when the number had to be dropped: it is not a valid number, or
+ * another account already holds its canonical form. The rules only let a
+ * contact doc show a number its owner has claimed.
  */
-export async function migrateLegacyContact(uid: string): Promise<void> {
-  await runTransaction(db(), async (transaction) => {
+export async function migrateLegacyContact(uid: string): Promise<boolean> {
+  return runTransaction(db(), async (transaction) => {
     const userRef = doc(db(), 'users', uid);
     const profile = await transaction.get(userRef);
     const account = await transaction.get(accountRef(uid));
     const contact = await transaction.get(contactRef(uid));
 
     const onProfile = profile.data() ?? {};
-    const legacyPhone =
+    const current = (contact.data()?.phone as string | null | undefined) ?? null;
+    const stored =
+      current ??
       (onProfile.phone as string | null | undefined) ??
       (account.data()?.phone as string | null | undefined) ??
       null;
     const hasLegacyFields = 'phone' in onProfile || 'pushTokens' in onProfile;
     const hasLegacyAccountPhone = account.exists() && 'phone' in (account.data() ?? {});
 
-    if (contact.exists() && !hasLegacyFields && !hasLegacyAccountPhone) return;
+    const phone = stored ? tryNormalizePhone(stored) : null;
+    const alreadyCanonical = contact.exists() && current === phone;
+    if (alreadyCanonical && !hasLegacyFields && !hasLegacyAccountPhone) return false;
 
-    const phone = (contact.data()?.phone as string | null | undefined) ?? legacyPhone;
-
-    // Claim the number unless someone else already holds it; in that case the
-    // number still shows to chat partners, it just is not searchable.
+    // All reads before any write, as transactions require.
+    const oldClaim = stored && stored !== phone ? await transaction.get(phoneRef(stored)) : null;
+    let keep = false;
     let claim = false;
     if (phone) {
       const existing = await transaction.get(phoneRef(phone));
       claim = !existing.exists();
+      keep = claim || existing.data()?.uid === uid;
     }
 
-    transaction.set(contactRef(uid), { phone } satisfies ContactDoc);
+    if (oldClaim?.exists() && oldClaim.data().uid === uid) transaction.delete(phoneRef(stored!));
+    transaction.set(contactRef(uid), { phone: keep ? phone : null } satisfies ContactDoc);
     if (claim && phone) transaction.set(phoneRef(phone), { uid });
     if (hasLegacyFields) {
       transaction.update(userRef, { phone: deleteField(), pushTokens: deleteField() });
@@ -212,6 +220,8 @@ export async function migrateLegacyContact(uid: string): Promise<void> {
     if (hasLegacyAccountPhone) {
       transaction.set(accountRef(uid), { phone: deleteField() }, { merge: true });
     }
+
+    return stored !== null && !keep;
   });
 }
 
