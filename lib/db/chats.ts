@@ -51,6 +51,7 @@ export async function ensureDirectChat(
       lastMessage: null,
       lastRead: {},
       lastDelivered: {},
+      unread: {},
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -129,6 +130,7 @@ export function subscribeChats(uid: string, onChange: (chats: ChatSummary[]) => 
 export async function markRead(chatId: string, uid: string): Promise<void> {
   await updateDoc(doc(db(), 'chats', chatId), {
     [`lastRead.${uid}`]: serverTimestamp(),
+    [`unread.${uid}`]: 0,
   });
 }
 

@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdentity, publicKeyFrom } from './identity';
+import { generateIdentity, publicKeyFrom, matchesPublicKey } from './identity';
 import { seal, open } from './envelope';
 import { wrapPrivateKey, unwrapPrivateKey } from './backup';
+import {
+  generateRecoveryKey,
+  normalizeRecoveryKey,
+  isWellFormedRecoveryKey,
+  wrapWithRecoveryKey,
+  unwrapWithRecoveryKey,
+} from './recovery';
+import { toB64 } from './codec';
 import { createConversationKey, sealConversationKey, openConversationKey } from './chat';
 import { safetyNumber, keyFingerprint } from './safetyNumber';
 
@@ -86,6 +94,80 @@ describe('passphrase backup', () => {
     expect(backup.opslimit).toBeGreaterThan(0);
     expect(backup.memlimit).toBeGreaterThan(0);
     expect(backup.salt).toBeTruthy();
+  });
+});
+
+describe('recovery key', () => {
+  it('is 24 Crockford characters in groups of four', async () => {
+    const key = await generateRecoveryKey();
+
+    expect(key).toMatch(/^([0-9A-HJKMNP-TV-Z]{4}-){5}[0-9A-HJKMNP-TV-Z]{4}$/);
+    expect(normalizeRecoveryKey(key)).toHaveLength(24);
+    expect(isWellFormedRecoveryKey(key)).toBe(true);
+  });
+
+  it('is different every time', async () => {
+    expect(await generateRecoveryKey()).not.toBe(await generateRecoveryKey());
+  });
+
+  it('forgives case, spacing, missing dashes and lookalike letters', () => {
+    const canonical = '0123ABCD1111EFGH0000JKMN';
+
+    expect(normalizeRecoveryKey('0123-ABCD-1111-EFGH-0000-JKMN')).toBe(canonical);
+    expect(normalizeRecoveryKey('0123abcd1111efgh0000jkmn')).toBe(canonical);
+    expect(normalizeRecoveryKey(' 0123 abcd 1111 efgh 0000 jkmn ')).toBe(canonical);
+    expect(normalizeRecoveryKey('0123-ABCD-ILi1-EFGH-oOO0-JKMN')).toBe(canonical);
+  });
+
+  it('rejects malformed input before any key derivation', () => {
+    expect(isWellFormedRecoveryKey('ABCD-EFGH')).toBe(false);
+    expect(isWellFormedRecoveryKey('0123-ABCD-1111-EFGH-0000-JKMU')).toBe(false);
+  });
+
+  it('restores history on a fresh device from a messily typed copy', async () => {
+    const identity = await generateIdentity();
+    const conversationKey = await createConversationKey();
+    const sealed = await sealConversationKey(conversationKey, identity.publicKey);
+    const envelope = await seal('written before the passphrase was forgotten', conversationKey);
+
+    const recoveryKey = await generateRecoveryKey();
+    const backup = await wrapWithRecoveryKey(identity.privateKey, recoveryKey);
+
+    const typed = ` ${recoveryKey.toLowerCase().replace(/-/g, ' ').replace(/0/g, 'o').replace(/1/g, 'l')} `;
+    const privateKey = await unwrapWithRecoveryKey(backup, typed);
+    expect(privateKey).toEqual(identity.privateKey);
+    expect(await matchesPublicKey(privateKey!, await toB64(identity.publicKey))).toBe(true);
+
+    const key = await openConversationKey(sealed, {
+      privateKey: privateKey!,
+      publicKey: await publicKeyFrom(privateKey!),
+    });
+    expect(await open(envelope, key!)).toBe('written before the passphrase was forgotten');
+  });
+
+  it('returns null for the wrong recovery key', async () => {
+    const identity = await generateIdentity();
+    const backup = await wrapWithRecoveryKey(identity.privateKey, await generateRecoveryKey());
+
+    expect(await unwrapWithRecoveryKey(backup, await generateRecoveryKey())).toBeNull();
+  });
+
+  it('refuses a key that belongs to a different account', async () => {
+    const mine = await generateIdentity();
+    const theirs = await generateIdentity();
+
+    expect(await matchesPublicKey(theirs.privateKey, await toB64(mine.publicKey))).toBe(false);
+  });
+
+  it('after a passphrase change, the old passphrase fails and the new one works', async () => {
+    const identity = await generateIdentity();
+    const before = await wrapPrivateKey(identity.privateKey, 'old passphrase');
+    expect(await unwrapPrivateKey(before, 'old passphrase')).toEqual(identity.privateKey);
+
+    // Re-wrapped from the key this device holds; the stored backup is replaced.
+    const after = await wrapPrivateKey(identity.privateKey, 'brand new passphrase');
+    expect(await unwrapPrivateKey(after, 'old passphrase')).toBeNull();
+    expect(await unwrapPrivateKey(after, 'brand new passphrase')).toEqual(identity.privateKey);
   });
 });
 

@@ -17,6 +17,8 @@ export type ChatListRow = {
   lastSenderId: string | null;
   updatedAt: Date | null;
   unread: boolean;
+  /** Messages not yet opened; at least 1 whenever `unread` is true. */
+  unreadCount: number;
   /** Peer receipts, for rendering ticks on messages I sent. */
   peerReadAt: Date | null;
   peerDeliveredAt: Date | null;
@@ -82,18 +84,22 @@ export function useChatList() {
             });
           }
 
+          // Approximate but cheap: anything newer than my last open, that I
+          // did not send myself.
+          const unread =
+            chat.lastMessage !== null &&
+            chat.lastMessage.senderId !== user.uid &&
+            (readAt === null || (updatedAt !== null && updatedAt > readAt));
+
           return {
             id: chat.id,
             peer,
             preview: await decryptPreview(chat.lastMessage, key),
             lastSenderId: chat.lastMessage?.senderId ?? null,
             updatedAt,
-            // Approximate but cheap: anything newer than my last open, that I
-            // did not send myself.
-            unread:
-              chat.lastMessage !== null &&
-              chat.lastMessage.senderId !== user.uid &&
-              (readAt === null || (updatedAt !== null && updatedAt > readAt)),
+            unread,
+            // Chats from before the counter existed have none: show 1, not 0.
+            unreadCount: unread ? Math.max(chat.unread?.[user.uid] ?? 0, 1) : 0,
             peerReadAt: peerUid ? (chat.lastRead?.[peerUid]?.toDate?.() ?? null) : null,
             peerDeliveredAt: peerUid ? (chat.lastDelivered?.[peerUid]?.toDate?.() ?? null) : null,
           };

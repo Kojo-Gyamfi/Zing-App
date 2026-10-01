@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
 import { Splash } from '@/components/Splash';
@@ -15,12 +15,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const status = useSession((state) => state.status);
+  // Set once the session has been ready on this mount. Losing it after that is
+  // a sign-out, not a deep link, so the next sign-in starts at the chat list
+  // rather than wherever the person happened to sign out from (Settings).
+  const wasReady = useRef(false);
 
   useEffect(() => {
     // Deep links (a shared profile, a chat) should survive the detour
     // through sign-in, and be forgotten once we are back inside.
-    if (status === 'ready') clearReturnTo();
-    else if (status !== 'loading' && pathname !== '/chats') rememberReturnTo(pathname);
+    if (status === 'ready') {
+      wasReady.current = true;
+      clearReturnTo();
+    } else if (status !== 'loading' && !wasReady.current && pathname !== '/chats') {
+      rememberReturnTo(pathname);
+    }
 
     if (status === 'signedOut') router.replace('/login');
     if (status === 'needsProfile') router.replace('/onboarding');

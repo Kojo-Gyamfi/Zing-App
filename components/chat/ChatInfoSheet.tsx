@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Avatar } from '@/components/ui/Avatar';
 import { getPhone } from '@/lib/db/users';
+import { formatPhone } from '@/lib/phone';
 import { lastSeenLabel } from '@/lib/format';
 import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
@@ -104,7 +105,7 @@ export function ChatInfoSheet({
                 <span className="text-faint">Loading…</span>
               ) : phone ? (
                 <a href={`tel:${phone}`} className="text-zing">
-                  {phone}
+                  {formatPhone(phone)}
                 </a>
               ) : (
                 <span className="text-faint">No number added</span>
