@@ -33,6 +33,12 @@ export const viewport: Viewport = {
   // Zoom stays enabled. iOS auto-zooms on focus only when an input is under
   // 16px, so the composer sets its own font size instead of banning pinch.
   userScalable: true,
+  // Android Chrome's default (resizes-visual) slides the keyboard over the
+  // page without shrinking the layout, so every h-dvh screen keeps its full
+  // height and the composer and search boxes end up under the keyboard.
+  // resizes-content shrinks the layout instead, and dvh with it. iOS ignores
+  // this and scrolls the focused field into view on its own.
+  interactiveWidget: 'resizes-content',
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

@@ -62,6 +62,19 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
   }, [messages.length, peerTyping]);
 
+  // The keyboard or emoji panel opening shrinks the list from below without
+  // moving its scroll position, which would slide the newest messages out of
+  // sight behind the composer. Stay pinned if the reader was at the bottom.
+  useEffect(() => {
+    const node = scroller.current;
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      if (atBottom.current) node.scrollTo({ top: node.scrollHeight });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   const groups = useMemo(() => groupByDay(messages), [messages]);
   const byId = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
 
