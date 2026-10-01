@@ -25,6 +25,16 @@ export type AccountDoc = {
   pushTokens: string[];
 };
 
+/**
+ * users/{uid}/private/recovery -- owner-only. The private key wrapped a second
+ * time, under the recovery key the user wrote down. Absent on accounts created
+ * before recovery keys existed, until they make one in Settings.
+ */
+export type RecoveryDoc = {
+  backup: KeyBackup;
+  createdAt: Timestamp;
+};
+
 /** users/{uid}/shared/contact -- readable by its owner and anyone they have a chat with. */
 export type ContactDoc = {
   phone: string | null;  // optional; mirrored as a phones/{phone} claim for discovery

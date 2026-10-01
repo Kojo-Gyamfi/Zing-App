@@ -72,8 +72,8 @@ service cloud.firestore {
 
       allow delete: if false;
 
-      // Owner-only: push tokens (plus a phone number on a few early accounts,
-      // moved out on their next save). The push route reads this with admin
+      // Owner-only: push tokens and the recovery-key backup (plus a phone
+      // number on a few early accounts, moved out on their next save). The push route reads this with admin
       // credentials, which bypass rules.
       match /private/{docId} {
         allow read, write: if isSelf(uid);

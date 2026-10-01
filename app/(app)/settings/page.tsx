@@ -3,13 +3,25 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@/lib/store/session';
-import { getPhone, setPhone as savePhone, updateProfile } from '@/lib/db/users';
+import {
+  getPhone,
+  getRecoveryBackup,
+  setPhone as savePhone,
+  setRecoveryBackup,
+  updateKeyBackup,
+  updateProfile,
+} from '@/lib/db/users';
+import { wrapPrivateKey } from '@/lib/crypto/backup';
+import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
+import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
+
+const MIN_PASSPHRASE = 10;
 
 export default function SettingsPage() {
-  const { profile, signOut, refreshProfile } = useSession();
+  const { profile, identity, signOut, refreshProfile } = useSession();
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
@@ -19,12 +31,84 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
+  const [changingPassphrase, setChangingPassphrase] = useState(false);
+  const [newPassphrase, setNewPassphrase] = useState('');
+  const [confirmPassphrase, setConfirmPassphrase] = useState('');
+  const [passphraseError, setPassphraseError] = useState<string | null>(null);
+  const [passphraseBusy, setPassphraseBusy] = useState(false);
+  const [passphraseSaved, setPassphraseSaved] = useState(false);
+
+  // undefined while loading, null when this account has never made one.
+  const [recoveryCreated, setRecoveryCreated] = useState<Date | null | undefined>(undefined);
+  const [confirmingNewKey, setConfirmingNewKey] = useState(false);
+  const [newRecoveryKey, setNewRecoveryKey] = useState<string | null>(null);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+
   // The number lives in its own doc, not the public profile.
   const uid = profile?.uid;
   useEffect(() => {
     if (!uid) return;
     void getPhone(uid, true).then((number) => setPhone(number ?? ''));
+    void getRecoveryBackup(uid)
+      .then((doc) => setRecoveryCreated(doc ? (doc.createdAt?.toDate() ?? new Date()) : null))
+      .catch(() => setRecoveryCreated(null));
   }, [uid]);
+
+  /**
+   * No old passphrase needed: this device already holds the private key, which
+   * is what the passphrase protects. Someone who forgot theirs but still has an
+   * unlocked phone fixes it here.
+   */
+  async function changePassphrase() {
+    if (!profile || !identity) return;
+    setPassphraseError(null);
+
+    if (newPassphrase.length < MIN_PASSPHRASE) {
+      setPassphraseError(`At least ${MIN_PASSPHRASE} characters.`);
+      return;
+    }
+    if (newPassphrase !== confirmPassphrase) {
+      setPassphraseError('Those two do not match.');
+      return;
+    }
+
+    setPassphraseBusy(true);
+    try {
+      await updateKeyBackup(profile.uid, await wrapPrivateKey(identity.privateKey, newPassphrase));
+      await refreshProfile();
+      setChangingPassphrase(false);
+      setNewPassphrase('');
+      setConfirmPassphrase('');
+      setPassphraseSaved(true);
+      setTimeout(() => setPassphraseSaved(false), 3000);
+    } catch {
+      setPassphraseError('Could not save. Check your connection and try again.');
+    } finally {
+      setPassphraseBusy(false);
+    }
+  }
+
+  /** Overwrites the old recovery doc, so the previous key stops working. */
+  async function createRecoveryKey() {
+    if (!profile || !identity) return;
+    setRecoveryError(null);
+    setRecoveryBusy(true);
+    try {
+      const recoveryKey = await generateRecoveryKey();
+      await setRecoveryBackup(
+        profile.uid,
+        await wrapWithRecoveryKey(identity.privateKey, recoveryKey),
+      );
+      setNewRecoveryKey(recoveryKey);
+      setRecoveryCreated(new Date());
+      setConfirmingNewKey(false);
+    } catch {
+      setRecoveryError('Could not create a recovery key. Check your connection and try again.');
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
 
   async function save() {
     if (!profile) return;
@@ -130,6 +214,118 @@ export default function SettingsPage() {
         </section>
 
         <section className="space-y-3">
+          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Security</h2>
+
+          <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+            <div>
+              <p className="text-[14px] font-medium text-ink">Passphrase</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-faint">
+                Unlocks your messages on a new device. You don&apos;t need the old one to change
+                it — this device already holds your key.
+              </p>
+            </div>
+
+            {changingPassphrase ? (
+              <div className="space-y-3">
+                <Field
+                  label="New passphrase"
+                  type="password"
+                  value={newPassphrase}
+                  onChange={(event) => setNewPassphrase(event.target.value)}
+                  hint="At least 10 characters. A few random words beats one clever word."
+                  autoComplete="new-password"
+                />
+                <Field
+                  label="Type it again"
+                  type="password"
+                  value={confirmPassphrase}
+                  onChange={(event) => setConfirmPassphrase(event.target.value)}
+                  error={passphraseError}
+                  autoComplete="new-password"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setChangingPassphrase(false);
+                      setPassphraseError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={changePassphrase}
+                    busy={passphraseBusy}
+                    disabled={!newPassphrase || !confirmPassphrase}
+                  >
+                    Save passphrase
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" onClick={() => setChangingPassphrase(true)}>
+                  Change passphrase
+                </Button>
+                {passphraseSaved && <span className="text-[13px] text-zing">Passphrase changed</span>}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+            <div>
+              <p className="text-[14px] font-medium text-ink">Recovery key</p>
+              <p className="mt-1 text-[12px] leading-relaxed text-faint">
+                {recoveryCreated === undefined
+                  ? 'Checking…'
+                  : recoveryCreated === null
+                    ? 'You have no recovery key. Without one, a forgotten passphrase means your messages are gone for good.'
+                    : `Created ${recoveryCreated.toLocaleDateString()}. The only way back in if you forget your passphrase.`}
+              </p>
+            </div>
+
+            {newRecoveryKey ? (
+              <div className="space-y-3">
+                <p className="text-[13px] leading-relaxed font-medium text-ink">
+                  Save this now — we can&apos;t show it again. Any older recovery key no longer
+                  works.
+                </p>
+                <RecoveryKeyDisplay recoveryKey={newRecoveryKey} username={profile.username} />
+                <Button variant="ghost" onClick={() => setNewRecoveryKey(null)} className="w-full">
+                  I&apos;ve saved it
+                </Button>
+              </div>
+            ) : confirmingNewKey ? (
+              <div className="space-y-3">
+                <p className="text-[13px] leading-relaxed text-muted">
+                  Your current recovery key will stop working the moment a new one is made.
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={() => setConfirmingNewKey(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={createRecoveryKey} busy={recoveryBusy}>
+                    Replace it
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant={recoveryCreated === null ? 'primary' : 'ghost'}
+                busy={recoveryBusy}
+                disabled={recoveryCreated === undefined}
+                onClick={() =>
+                  recoveryCreated ? setConfirmingNewKey(true) : void createRecoveryKey()
+                }
+              >
+                {recoveryCreated ? 'Create a new recovery key' : 'Create a recovery key'}
+              </Button>
+            )}
+            {recoveryError && <p className="text-[12px] text-danger">{recoveryError}</p>}
+          </div>
+        </section>
+
+        <section className="space-y-3">
           <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Account</h2>
 
           {confirmingSignOut ? (
@@ -138,15 +334,15 @@ export default function SettingsPage() {
                 Signing out erases the key stored on this device.
               </p>
               <p className="text-[13px] leading-relaxed text-muted">
-                You will need your recovery passphrase to read your messages again. If you do not
-                have it written down, do not sign out.
+                You will need your passphrase or recovery key to read your messages again. If you
+                have neither written down, do not sign out.
               </p>
               <div className="flex gap-2">
                 <Button variant="ghost" onClick={() => setConfirmingSignOut(false)}>
                   Cancel
                 </Button>
                 <Button variant="danger" onClick={() => void signOut()}>
-                  I have my passphrase — sign out
+                  I have them — sign out
                 </Button>
               </div>
             </div>

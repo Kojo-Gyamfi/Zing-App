@@ -9,7 +9,7 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
-import type { UserDoc, AccountDoc, ContactDoc } from './schema';
+import type { UserDoc, AccountDoc, ContactDoc, RecoveryDoc } from './schema';
 import type { KeyBackup } from '@/lib/crypto/types';
 
 export async function getUser(uid: string): Promise<UserDoc | null> {
@@ -33,6 +33,9 @@ export function normalizePhone(raw: string): string | null {
  * every signed-in user, so nothing private may live there.
  */
 const accountRef = (uid: string) => doc(db(), 'users', uid, 'private', 'account');
+
+/** The recovery-key backup. Owner-only, and kept off the public profile. */
+const recoveryRef = (uid: string) => doc(db(), 'users', uid, 'private', 'recovery');
 
 /**
  * The phone number. Readable by its owner and by anyone who already has a chat
@@ -61,6 +64,7 @@ export async function createProfile(params: {
   photoURL: string | null;
   publicKey: string;
   keyBackup: KeyBackup;
+  recoveryBackup?: KeyBackup;
   phone: string | null;
 }): Promise<void> {
   const username = normalizeUsername(params.username);
@@ -89,6 +93,12 @@ export async function createProfile(params: {
     transaction.set(accountRef(params.uid), { pushTokens: [] } satisfies AccountDoc);
     transaction.set(contactRef(params.uid), { phone } satisfies ContactDoc);
     if (phone) transaction.set(phoneRef(phone), { uid: params.uid });
+    if (params.recoveryBackup) {
+      transaction.set(recoveryRef(params.uid), {
+        backup: params.recoveryBackup,
+        createdAt: serverTimestamp(),
+      });
+    }
   });
 }
 
@@ -212,6 +222,17 @@ export async function registerPushToken(uid: string, token: string): Promise<voi
 /** Re-wrapping after a passphrase change. The key itself never changes. */
 export async function updateKeyBackup(uid: string, keyBackup: KeyBackup): Promise<void> {
   await updateDoc(doc(db(), 'users', uid), { keyBackup });
+}
+
+/** Null for accounts that have never made a recovery key. */
+export async function getRecoveryBackup(uid: string): Promise<RecoveryDoc | null> {
+  const snapshot = await getDoc(recoveryRef(uid));
+  return snapshot.exists() ? (snapshot.data() as RecoveryDoc) : null;
+}
+
+/** Replaces any earlier recovery key: the old one stops working. */
+export async function setRecoveryBackup(uid: string, backup: KeyBackup): Promise<void> {
+  await setDoc(recoveryRef(uid), { backup, createdAt: serverTimestamp() });
 }
 
 export async function updateProfile(

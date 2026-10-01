@@ -1,4 +1,5 @@
 import { getSodium } from './sodium';
+import { toB64 } from './codec';
 import type { Identity } from './types';
 
 /**
@@ -16,4 +17,12 @@ export async function generateIdentity(): Promise<Identity> {
 export async function publicKeyFrom(privateKey: Uint8Array): Promise<Uint8Array> {
   const sodium = await getSodium();
   return sodium.crypto_scalarmult_base(privateKey);
+}
+
+/**
+ * True when a private key belongs to the registered public key. Checked after
+ * every unwrap so a key that would fail every decryption is refused up front.
+ */
+export async function matchesPublicKey(privateKey: Uint8Array, publicKeyB64: string): Promise<boolean> {
+  return (await toB64(await publicKeyFrom(privateKey))) === publicKeyB64;
 }

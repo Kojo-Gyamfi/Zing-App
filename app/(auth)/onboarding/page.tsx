@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
 import { generateIdentity } from '@/lib/crypto/identity';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
+import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { saveIdentity } from '@/lib/crypto/vault';
 import { toB64 } from '@/lib/crypto/codec';
+import type { Identity } from '@/lib/crypto/types';
 import {
   createProfile,
   findByUsername,
@@ -18,6 +20,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
+import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 import { returnPath } from '@/lib/returnTo';
 import { clearLoginIntent, getLoginIntent } from '@/lib/loginIntent';
 
@@ -30,12 +33,17 @@ export default function OnboardingPage() {
   // never has to match the client's value during hydration.
   const [expectedAccount] = useState(() => getLoginIntent() === 'signin');
 
-  const [step, setStep] = useState<'handle' | 'passphrase'>('handle');
+  const [step, setStep] = useState<'handle' | 'passphrase' | 'recovery'>('handle');
   const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
   const [understood, setUnderstood] = useState(false);
+  // Held between account creation and the recovery step: the session only
+  // becomes ready once the key has been saved, or it would redirect away first.
+  const [identity, setCreatedIdentity] = useState<Identity | null>(null);
+  const [recoveryKey, setRecoveryKey] = useState('');
+  const [recoverySaved, setRecoverySaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -90,6 +98,8 @@ export default function OnboardingPage() {
     try {
       const identity = await generateIdentity();
       const keyBackup = await wrapPrivateKey(identity.privateKey, passphrase);
+      const freshRecoveryKey = await generateRecoveryKey();
+      const recoveryBackup = await wrapWithRecoveryKey(identity.privateKey, freshRecoveryKey);
 
       // Profile first: if this fails on a taken username we have not yet
       // written a key to the device that no account refers to.
@@ -100,15 +110,16 @@ export default function OnboardingPage() {
         photoURL: user!.photoURL ?? null,
         publicKey: await toB64(identity.publicKey),
         keyBackup,
+        recoveryBackup,
         phone: phone.trim() || null,
       });
 
       await saveIdentity(identity.privateKey);
 
-      const profile = await getUser(user!.uid);
-      if (profile) setIdentity(identity, profile);
-      clearLoginIntent();
-      router.replace(returnPath());
+      setCreatedIdentity(identity);
+      setRecoveryKey(freshRecoveryKey);
+      setBusy(false);
+      setStep('recovery');
     } catch (cause) {
       const code = (cause as Error).message;
       setError(
@@ -122,16 +133,31 @@ export default function OnboardingPage() {
     }
   }
 
+  async function enterApp() {
+    if (!identity) return;
+    setBusy(true);
+    const profile = await getUser(user!.uid);
+    if (profile) setIdentity(identity, profile);
+    clearLoginIntent();
+    router.replace(returnPath());
+  }
+
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-6 pt-safe pb-safe">
       <header className="pt-10 pb-8">
         <h1 className="text-2xl font-bold tracking-tight">
-          {step === 'handle' ? 'Pick your handle' : 'Set a recovery passphrase'}
+          {step === 'handle'
+            ? 'Pick your handle'
+            : step === 'passphrase'
+              ? 'Set a recovery passphrase'
+              : 'Save your recovery key'}
         </h1>
         <p className="mt-1.5 text-[14px] text-muted">
           {step === 'handle'
             ? 'This is how friends find you on Zing.'
-            : 'This is the only way back into your messages.'}
+            : step === 'passphrase'
+              ? 'This is how you unlock your messages on a new device.'
+              : 'Your backup in case the passphrase is ever forgotten.'}
         </p>
       </header>
 
@@ -184,6 +210,39 @@ export default function OnboardingPage() {
             Continue
           </Button>
         </div>
+      ) : step === 'recovery' ? (
+        <div className="flex flex-1 flex-col gap-5">
+          <div className="rounded-2xl border border-line bg-surface p-4">
+            <p className="text-[13px] leading-relaxed text-muted">
+              If you forget your passphrase, this key is the only other way back in. Write it down
+              or keep it in a password manager.
+            </p>
+            <p className="mt-3 text-[13px] leading-relaxed font-medium text-ink">
+              We can&apos;t show it again.
+            </p>
+          </div>
+
+          <RecoveryKeyDisplay recoveryKey={recoveryKey} username={handle} />
+
+          <label className="flex items-start gap-3 text-[13px] leading-relaxed text-muted">
+            <input
+              type="checkbox"
+              checked={recoverySaved}
+              onChange={(event) => setRecoverySaved(event.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-zing"
+            />
+            I&apos;ve saved my recovery key.
+          </label>
+
+          <Button
+            onClick={() => void enterApp()}
+            busy={busy}
+            disabled={!recoverySaved}
+            className="mt-auto mb-8 w-full"
+          >
+            Continue
+          </Button>
+        </div>
       ) : (
         <div className="flex flex-1 flex-col gap-5">
           {/*
@@ -198,8 +257,9 @@ export default function OnboardingPage() {
               somewhere else, this passphrase is what unlocks them.
             </p>
             <p className="mt-3 text-[13px] leading-relaxed font-medium text-ink">
-              We cannot reset it. Forget it and every message is gone permanently — there is no
-              backdoor, which is the entire point.
+              We cannot reset it. Next you get a recovery key, the only other way back in. Lose
+              both and every message is gone permanently — there is no backdoor, which is the
+              entire point.
             </p>
           </div>
 
