@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { onAuthStateChanged, signOut as firebaseSignOut, type User } from 'firebase/auth';
 import { auth } from '@/lib/firebase/client';
-import { getUser, migrateLegacyContact } from '@/lib/db/users';
+import { getUser } from '@/lib/db/users';
 import { loadIdentity, clearIdentity } from '@/lib/crypto/vault';
 import { publicKeyFrom } from '@/lib/crypto/identity';
 import { toB64 } from '@/lib/crypto/codec';
@@ -42,35 +42,25 @@ type SessionState = {
   signOut: () => Promise<void>;
 };
 
-/** Set when migrateLegacyContact had to drop a number; Settings asks for it again. */
-export const phoneDroppedFlag = (uid: string) => `zing.phone.dropped.${uid}`;
+/**
+ * Presence is tracked for exactly one account at a time. Both ways of reaching
+ * `ready` (launch, and unlocking/onboarding) go through here, and so does
+ * every way out, so a second tracker never leaks.
+ */
+let stopPresence: ((markOffline?: boolean) => void) | null = null;
+
+function startPresence(uid: string) {
+  stopPresence?.();
+  stopPresence = trackPresence(uid);
+}
 
 /**
- * Moves an early account's phone number out of its public profile and into
- * canonical form (see migrateLegacyContact). Once per account per device:
- * after that it is a no-op that would still cost several reads every launch.
- * The v2 flag re-runs it for accounts that took the first, pre-E.164 version.
+ * markOffline false when the sign-in is already gone (signed out elsewhere,
+ * account deleted): the write would be refused, so don't try.
  */
-function migrateOnce(uid: string) {
-  const flag = `zing.contact.migrated.v2.${uid}`;
-  try {
-    if (localStorage.getItem(flag)) return;
-  } catch {
-    // No storage: run it; the transaction exits early when there is nothing to do.
-  }
-
-  void migrateLegacyContact(uid)
-    .then((dropped) => {
-      try {
-        localStorage.setItem(flag, '1');
-        if (dropped) localStorage.setItem(phoneDroppedFlag(uid), '1');
-      } catch {
-        // Runs again next launch; harmless.
-      }
-    })
-    .catch(() => {
-      // Offline or over quota: try again next launch.
-    });
+function endPresence(markOffline = true) {
+  stopPresence?.(markOffline);
+  stopPresence = null;
 }
 
 export const useSession = create<SessionState>((set, get) => ({
@@ -81,18 +71,26 @@ export const useSession = create<SessionState>((set, get) => ({
 
   /** Mounted once by the app shell. Returns a teardown. */
   start: () => {
-    let stopPresence: (() => void) | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    // Bumped on every auth change. resolve() awaits several reads; if the
+    // user signs out (or switches) meanwhile, its late answer must not land.
+    let generation = 0;
 
-    const stopAuth = onAuthStateChanged(auth(), async (user) => {
-      stopPresence?.();
-      stopPresence = null;
+    async function resolve(user: User, mine: number) {
+      const stale = () => mine !== generation;
 
-      if (!user) {
-        set({ status: 'signedOut', user: null, profile: null, identity: null });
+      let profile: UserDoc | null;
+      try {
+        profile = await getUser(user.uid);
+      } catch {
+        // Offline on first launch, with nothing cached yet. Stay on the
+        // splash and try again rather than sending a real account to
+        // onboarding.
+        if (!stale()) retry = setTimeout(() => void resolve(user, mine), 3000);
         return;
       }
+      if (stale()) return;
 
-      const profile = await getUser(user.uid);
       if (!profile) {
         set({ status: 'needsProfile', user, profile: null, identity: null });
         return;
@@ -106,35 +104,49 @@ export const useSession = create<SessionState>((set, get) => ({
       const matches =
         identity !== null &&
         (await toB64(await publicKeyFrom(identity.privateKey))) === profile.publicKey;
+      if (stale()) return;
 
       if (!matches) {
         set({ status: 'locked', user, profile, identity: null });
         return;
       }
 
-      stopPresence = trackPresence(user.uid);
+      startPresence(user.uid);
       set({ status: 'ready', user, profile, identity });
-      migrateOnce(user.uid);
+    }
+
+    const stopAuth = onAuthStateChanged(auth(), (user) => {
+      const mine = ++generation;
+      // By now auth has already changed; a presence write would be refused.
+      endPresence(false);
+      if (retry) clearTimeout(retry);
+      retry = null;
+
+      if (!user) {
+        set({ status: 'signedOut', user: null, profile: null, identity: null });
+        return;
+      }
+      void resolve(user, mine);
     });
 
     return () => {
       stopAuth();
-      stopPresence?.();
+      if (retry) clearTimeout(retry);
+      endPresence();
     };
   },
 
   refreshProfile: async () => {
     const { user } = get();
     if (!user) return;
-    set({ profile: await getUser(user.uid) });
+    const profile = await getUser(user.uid).catch(() => null);
+    // Keep what we have rather than blanking the app on a failed read.
+    if (profile) set({ profile });
   },
 
   setIdentity: (identity, profile) => {
     const { user } = get();
-    if (user) {
-      trackPresence(user.uid);
-      migrateOnce(user.uid);
-    }
+    if (user) startPresence(user.uid);
     set({ status: 'ready', identity, profile });
   },
 
@@ -153,6 +165,7 @@ export const useSession = create<SessionState>((set, get) => ({
         new Promise((resolve) => setTimeout(resolve, 3000)),
       ]);
     }
+    endPresence();
     await clearIdentity();
     await firebaseSignOut(auth());
     set({ status: 'signedOut', user: null, profile: null, identity: null });

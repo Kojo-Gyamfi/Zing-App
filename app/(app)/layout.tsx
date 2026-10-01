@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
 import { Splash } from '@/components/Splash';
 import { InstallCoach } from '@/components/InstallCoach';
+import { OfflineBanner } from '@/components/OfflineBanner';
 import { clearReturnTo, rememberReturnTo } from '@/lib/returnTo';
 
 /**
@@ -43,6 +44,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <InstallCoach />
+      <OfflineBanner />
     </>
   );
 }

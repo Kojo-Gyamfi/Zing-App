@@ -1,6 +1,8 @@
 import {
   doc,
   collection,
+  collectionGroup,
+  where,
   query,
   orderBy,
   limit,
@@ -18,7 +20,7 @@ import {
 import { db } from '@/lib/firebase/client';
 import { seal, open } from '@/lib/crypto/envelope';
 import type { Envelope } from '@/lib/crypto/types';
-import type { MessageDoc, DecryptedMessage } from './schema';
+import { MAX_MESSAGE_LENGTH, type MessageDoc, type DecryptedMessage } from './schema';
 
 export const PAGE_SIZE = 30;
 
@@ -46,6 +48,7 @@ export async function sendMessage(params: {
   conversationKey: Uint8Array;
   replyTo?: string | null;
 }): Promise<{ id: string; envelope: Envelope; committed: Promise<void> }> {
+  if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
 
   const messageRef = doc(collection(db(), 'chats', params.chatId, 'messages'));
@@ -73,6 +76,8 @@ export async function sendMessage(params: {
     updatedAt: serverTimestamp(),
     // The recipient's unread badge. markRead puts it back to zero.
     ...(recipient ? { [`unread.${recipient}`]: increment(1) } : {}),
+    // Both members having sent something is what unlocks phone numbers.
+    [`sent.${params.senderId}`]: true,
   });
 
   return { id: messageRef.id, envelope, committed: batch.commit() };
@@ -120,6 +125,7 @@ export async function editMessage(params: {
   conversationKey: Uint8Array;
   isLatest: boolean;
 }): Promise<void> {
+  if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
   const batch = writeBatch(db());
 
@@ -185,14 +191,61 @@ export function subscribeHidden(
 ) {
   return onSnapshot(
     hiddenRef(chatId, uid),
-    (snapshot) => onChange(new Set((snapshot.data()?.ids as string[] | undefined) ?? [])),
+    (snapshot) => {
+      onChange(new Set((snapshot.data()?.ids as string[] | undefined) ?? []));
+      // Lists written before they named their owner are invisible to
+      // subscribeAllHidden; stamp them the first time they are seen.
+      if (snapshot.exists() && !snapshot.metadata.fromCache && snapshot.data().uid !== uid) {
+        void setDoc(hiddenRef(chatId, uid), { uid }, { merge: true }).catch(() => undefined);
+      }
+    },
     // Rules not deployed yet, or offline with nothing cached: hide nothing.
     () => onChange(new Set()),
   );
 }
 
 export async function hideMessage(chatId: string, uid: string, messageId: string): Promise<void> {
-  await setDoc(hiddenRef(chatId, uid), { ids: arrayUnion(messageId) }, { merge: true });
+  await setDoc(hiddenRef(chatId, uid), { uid, ids: arrayUnion(messageId) }, { merge: true });
+}
+
+/**
+ * Every "Delete for me" list this user has, across all chats, in one query --
+ * the chat list needs them so a hidden newest message is not the preview.
+ * Keyed by chat id.
+ */
+export function subscribeAllHidden(uid: string, onChange: (hidden: Map<string, Set<string>>) => void) {
+  return onSnapshot(
+    query(collectionGroup(db(), 'hidden'), where('uid', '==', uid)),
+    (snapshot) => {
+      onChange(
+        new Map(
+          snapshot.docs.map((entry) => [
+            entry.ref.parent.parent!.id,
+            new Set((entry.data().ids as string[] | undefined) ?? []),
+          ]),
+        ),
+      );
+    },
+    () => onChange(new Map()),
+  );
+}
+
+/**
+ * The newest message in a chat that this user has not hidden, decrypted --
+ * the list preview when the real newest one was deleted for me. Looks back a
+ * page at most; past that, no preview.
+ */
+export async function latestVisibleMessage(
+  chatId: string,
+  conversationKey: Uint8Array | null,
+  hidden: Set<string>,
+): Promise<DecryptedMessage | null> {
+  if (!conversationKey) return null;
+  const snapshot = await getDocs(
+    query(collection(db(), 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE)),
+  );
+  const entry = snapshot.docs.find((candidate) => !hidden.has(candidate.id));
+  return entry ? decrypt(entry, conversationKey) : null;
 }
 
 /**

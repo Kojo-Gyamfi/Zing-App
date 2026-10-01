@@ -50,6 +50,17 @@ To do it by hand instead, copy `.env.local.example` and fill it in. The
 `NEXT_PUBLIC_*` values are public by design: they identify the project and
 authorize nothing. `FIREBASE_SERVICE_ACCOUNT` is the one real secret.
 
+Two optional extras, each off until its key is set:
+
+- **App Check** (`NEXT_PUBLIC_RECAPTCHA_SITE_KEY`): Firebase only answers
+  requests from the real app. Register a reCAPTCHA v3 key under App Check →
+  Apps, set the variable, then turn on **enforcement** for Firestore, Realtime
+  Database and Authentication. For localhost/ngrok, register the debug token the
+  browser console prints on first load (App Check → Manage debug tokens).
+- **Sentry** (`NEXT_PUBLIC_SENTRY_DSN` and `SENTRY_DSN`): error reports, and
+  nothing else — no breadcrumbs, inputs, request bodies or user data, so message
+  text can never reach it.
+
 ## 3. Deploy the security rules
 
 The rules **are** the authorization layer: browsers talk straight to Firestore, so
@@ -82,16 +93,25 @@ in production with no visible error.
 ## Testing it works
 
 ```bash
-npm test          # crypto round-trips, backup recovery, safety numbers
-npm run build     # typecheck + production build
+npm test             # crypto, recovery keys, phone numbers, receipts
+npm run test:rules   # every Firestore security rule, on the emulator
+npm run test:e2e     # two browsers: sign up, chat, edit, delete, unlock, delete account
+npm run build        # typecheck + production build
 ```
+
+`test:rules` and `test:e2e` run against the Firebase Emulator Suite, never the
+real project, and need Java 21 (`winget install Microsoft.OpenJDK.21`, or
+`brew install openjdk@21`). Run `npx playwright install chromium` once before
+the first `test:e2e`. GitHub Actions runs all of the above on every push
+(`.github/workflows/ci.yml`).
 
 The manual checks that matter:
 
 - **Encryption is real.** Send a message, then open Firestore in the Firebase
   Console. The `ciphertext` field must be unreadable. If you can read it, stop.
 - **Recovery.** DevTools → Application → clear IndexedDB → reload. Zing should ask
-  for the passphrase, then decrypt the full history.
+  for the passphrase, then decrypt the full history. "Forgot your passphrase?"
+  with the recovery key must work too.
 - **Two devices.** Two Google accounts in two browser profiles: messages arrive
   live, ticks fill in, typing shows, presence flips when one closes.
 - **Offline.** Airplane mode → send → the message queues → reconnect → it goes.

@@ -7,6 +7,7 @@ import {
   query,
   where,
   orderBy,
+  limit,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -103,13 +104,27 @@ export type ChatSummary = ChatDoc & {
   pending: boolean;
 };
 
-/** The chat list. Backed by the members array-contains + updatedAt index. */
-export function subscribeChats(uid: string, onChange: (chats: ChatSummary[]) => void) {
+/** How many chats the list loads at a time. */
+export const CHAT_PAGE_SIZE = 50;
+
+/**
+ * The newest `max` chats, live. Backed by the members array-contains +
+ * updatedAt index. The list raises `max` a page at a time as it is scrolled,
+ * so a long-time user does not pull every conversation they ever had on each
+ * launch. `hasMore` is a guess: a full page means there may be another.
+ */
+export function subscribeChats(
+  uid: string,
+  max: number,
+  onChange: (chats: ChatSummary[], hasMore: boolean) => void,
+  onError?: () => void,
+) {
   return onSnapshot(
     query(
       collection(db(), 'chats'),
       where('members', 'array-contains', uid),
       orderBy('updatedAt', 'desc'),
+      limit(max),
     ),
     (snapshot) => {
       onChange(
@@ -118,8 +133,10 @@ export function subscribeChats(uid: string, onChange: (chats: ChatSummary[]) => 
           ...(entry.data({ serverTimestamps: 'estimate' }) as ChatDoc),
           pending: entry.metadata.hasPendingWrites,
         })),
+        snapshot.size >= max,
       );
     },
+    () => onError?.(),
   );
 }
 
@@ -158,4 +175,19 @@ export function subscribeChat(chatId: string, onChange: (chat: ChatSummary | nul
         : null,
     );
   });
+}
+
+/**
+ * Calls back once this member's key doc exists. For a chat opened before the
+ * other side finished writing it -- the chat doc lands first, by design (see
+ * ensureDirectChat) -- so the thread can unlock the moment the key arrives.
+ */
+export function onConversationKeyReady(chatId: string, uid: string, onReady: () => void) {
+  return onSnapshot(
+    doc(db(), 'chats', chatId, 'keys', uid),
+    (snapshot) => {
+      if (snapshot.exists()) onReady();
+    },
+    () => undefined,
+  );
 }

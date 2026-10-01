@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { Avatar } from '@/components/ui/Avatar';
 import { getPhone } from '@/lib/db/users';
 import { formatPhone } from '@/lib/phone';
+import { useSession } from '@/lib/store/session';
+import { fromB64 } from '@/lib/crypto/codec';
+import { safetyNumber } from '@/lib/crypto/safetyNumber';
 import { lastSeenLabel } from '@/lib/format';
 import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
@@ -26,10 +29,7 @@ export function ChatInfoSheet({
   useEffect(() => {
     let live = true;
     void getPhone(peer.uid).then((number) => {
-      // Accounts that have not opened Zing since the privacy change still keep
-      // the number on their public profile; it is already visible there.
-      const legacy = (peer as UserDoc & { phone?: string | null }).phone ?? null;
-      if (live) setPhone(number ?? legacy);
+      if (live) setPhone(number);
     });
     return () => {
       live = false;
@@ -108,7 +108,9 @@ export function ChatInfoSheet({
                   {formatPhone(phone)}
                 </a>
               ) : (
-                <span className="text-faint">No number added</span>
+                <span className="text-faint">
+                  None — or not shared until you have both sent a message
+                </span>
               )}
             </dd>
           </div>
@@ -134,6 +136,9 @@ export function ChatInfoSheet({
           </svg>
           Messages are end-to-end encrypted
         </p>
+
+        <VerifyEncryption peer={peer} />
+
 
         <div className="flex gap-2">
           <button
@@ -161,6 +166,54 @@ export function ChatInfoSheet({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Safety number: the same 60 digits on both phones if, and only if, each
+ * holds the other's real key. Comparing them in person (or over a call) is
+ * the check that nobody -- the server included -- has slipped in a key.
+ */
+function VerifyEncryption({ peer }: { peer: UserDoc }) {
+  const identity = useSession((state) => state.identity);
+  const [open, setOpen] = useState(false);
+  const [number, setNumber] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !identity) return;
+    let live = true;
+    void fromB64(peer.publicKey)
+      .then((theirs) => safetyNumber(identity.publicKey, theirs))
+      .then((value) => {
+        if (live) setNumber(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [open, identity, peer.publicKey]);
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mx-auto block text-[13px] font-medium text-zing"
+      >
+        Verify encryption
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-line bg-void p-4 text-center">
+      <p className="text-[13px] leading-relaxed text-muted">
+        Compare these numbers with {peer.displayName}, in person or on a call. If they match on
+        both phones, nobody can read your messages but the two of you.
+      </p>
+      <p className="font-mono text-[16px] leading-relaxed tracking-wider text-ink">
+        {number ?? '…'}
+      </p>
     </div>
   );
 }

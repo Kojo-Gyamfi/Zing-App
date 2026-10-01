@@ -18,12 +18,26 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // True when the caller and `uid` have a direct chat. Chat ids are the two
-    // uids sorted and joined (enforced on create), so this is one lookup.
-    function sharesChatWith(uid) {
+    // True when the caller and `uid` have a chat in which BOTH have sent a
+    // message. Merely opening a chat with someone whose @username you know is
+    // not enough -- they have to have answered. Chat ids are the two uids
+    // sorted and joined (enforced on create), so this is one lookup.
+    function hasConversationWith(uid) {
       let me = request.auth.uid;
       let chatId = me < uid ? me + '_' + uid : uid + '_' + me;
-      return signedIn() && exists(/databases/$(database)/documents/chats/$(chatId));
+      let path = /databases/$(database)/documents/chats/$(chatId);
+      return signedIn()
+             && exists(path)
+             && get(path).data.get('sent', {}).get(me, false) == true
+             && get(path).data.get('sent', {}).get(uid, false) == true;
+    }
+
+    // Ceiling on one message's ciphertext, in characters of base64. Keeps one
+    // huge message from eating storage and every reader's bandwidth. The app
+    // stops at 4,000 characters (MAX_MESSAGE_LENGTH in lib/db/schema.ts), which
+    // seals to ~16,000 at worst.
+    function MAX_CIPHERTEXT() {
+      return 22000;
     }
 
     function chatMembers(chatId) {
@@ -58,35 +72,28 @@ service cloud.firestore {
       // Username and public key are identity anchors -- neither may drift after
       // creation, or safety numbers and @handles stop meaning anything. Only
       // these fields may change at all.
-      //
-      // phone and pushTokens may only be touched to remove them: early
-      // accounts stored both here, where anyone signed in could read them, and
-      // migrateLegacyContact moves them out.
       allow update: if isSelf(uid)
                     && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup', 'phone', 'pushTokens'])
-                    && (
-                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['phone', 'pushTokens'])
-                      || !request.resource.data.keys().hasAny(['phone', 'pushTokens'])
-                    );
+                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup']);
 
-      allow delete: if false;
+      // "Delete my account" (lib/db/account.ts). Chats and the messages in
+      // them stay: they belong to the other person too.
+      allow delete: if isSelf(uid);
 
-      // Owner-only: push tokens and the recovery-key backup (plus a phone
-      // number on a few early accounts, moved out on their next save). The push route reads this with admin
-      // credentials, which bypass rules.
+      // Owner-only: push tokens and the recovery-key backup. The push route
+      // reads this with admin credentials, which bypass rules.
       match /private/{docId} {
         allow read, write: if isSelf(uid);
       }
 
-      // The phone number: shown on the profile of someone you already chat
-      // with, never to arbitrary signed-in users.
+      // The phone number: shown to someone you have actually talked with --
+      // both of you have sent a message -- never to arbitrary signed-in users.
       //
       // The contact doc may show only a number its owner has claimed, so
       // nobody can display a number that belongs to someone else. getAfter()
       // sees a claim written in the same transaction.
       match /shared/{docId} {
-        allow read: if isSelf(uid) || sharesChatWith(uid);
+        allow read: if isSelf(uid) || hasConversationWith(uid);
         allow delete: if isSelf(uid);
         allow create, update: if isSelf(uid)
                               && (docId != 'contact'
@@ -97,16 +104,21 @@ service cloud.firestore {
       }
     }
 
-    // Username claims. Create-only, so a claim can never be stolen or reassigned.
-    // Each claim must be matched by the claimant's own profile in the same
-    // transaction, so one account cannot squat a pile of handles.
+    // Username claims. Never updated, so a claim can never be stolen or
+    // reassigned. Each claim must be matched by the claimant's own profile in
+    // the same transaction, so one account cannot squat a pile of handles.
+    // The owner releases it only when deleting their account, together with
+    // the profile itself.
     match /usernames/{username} {
       allow read: if signedIn();
       allow create: if signedIn()
                     && request.resource.data.uid == request.auth.uid
                     && username.matches('^[a-z0-9_]{3,20}$')
                     && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
-      allow update, delete: if false;
+      allow delete: if signedIn()
+                    && resource.data.uid == request.auth.uid
+                    && !existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if false;
     }
 
     // Phone number claims, for "find by phone". get works for someone who
@@ -145,10 +157,23 @@ service cloud.firestore {
 
       // The id must be the members' sorted uids, so a pair can never get a
       // second conversation under some other id.
+      //
+      // And a new chat starts empty. Everything else on the doc is guarded on
+      // update; without this a hand-rolled client could create a chat already
+      // claiming both people have spoken (unlocking a stranger's phone
+      // number), or with forged receipts, a huge badge or an oversized preview.
       allow create: if signedIn()
                     && request.auth.uid in request.resource.data.members
                     && request.resource.data.members.size() == 2
-                    && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1];
+                    && request.resource.data.members[0] < request.resource.data.members[1]
+                    && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1]
+                    && request.resource.data.keys().hasOnly([
+                         'members', 'lastMessage', 'lastRead', 'lastDelivered', 'unread',
+                         'createdAt', 'updatedAt'])
+                    && request.resource.data.get('lastMessage', null) == null
+                    && request.resource.data.get('lastRead', {}) == {}
+                    && request.resource.data.get('lastDelivered', {}) == {}
+                    && request.resource.data.get('unread', {}) == {};
 
       // A member may write only their own receipt, and only as "now" -- the app
       // always writes serverTimestamp(). Without this either member could mark
@@ -175,12 +200,33 @@ service cloud.firestore {
                && (!(peer in changed) || after[peer] == before.get(peer, 0) + 1);
       }
 
-      // lastMessage / updatedAt / receipts / unread may move; the member list may not.
+      // "Has sent a message here", one flag per member: what unlocks phone
+      // numbers (hasConversationWith). Only ever your own, only ever true.
+      function sentChangeOk() {
+        let before = resource.data.get('sent', {});
+        let after = request.resource.data.get('sent', {});
+        let changed = after.diff(before).affectedKeys();
+        return changed.size() == 0
+               || (changed.hasOnly([request.auth.uid]) && after[request.auth.uid] == true);
+      }
+
+      // The list preview is a copy of the newest message's ciphertext; it gets
+      // the same ceiling as the message.
+      function previewSizeOk() {
+        let preview = request.resource.data.get('lastMessage', null);
+        return preview == null
+               || preview.get('ciphertext', '').size() <= MAX_CIPHERTEXT();
+      }
+
+      // lastMessage / updatedAt / receipts / unread / sent may move; the
+      // member list may not.
       allow update: if isMember()
                     && request.resource.data.members == resource.data.members
                     && ownReceiptOnly('lastRead')
                     && ownReceiptOnly('lastDelivered')
-                    && unreadChangeOk();
+                    && unreadChangeOk()
+                    && sentChangeOk()
+                    && previewSizeOk();
 
       allow delete: if false;
 
@@ -194,8 +240,17 @@ service cloud.firestore {
 
       // "Delete for me": the ids of messages one member has hidden. Private to
       // that member -- the other person never learns what was hidden.
+      // Each doc also names its owner in a `uid` field, which is what lets the
+      // chat list fetch all of one person's hidden lists in a single
+      // collection-group query (see the match at the bottom).
       match /hidden/{uid} {
-        allow read, write: if isSelf(uid) && request.auth.uid in chatMembers(chatId);
+        allow read: if isSelf(uid) && request.auth.uid in chatMembers(chatId);
+        allow create, update: if isSelf(uid)
+                              && request.auth.uid in chatMembers(chatId)
+                              && request.resource.data.get('uid', uid) == uid;
+        // No membership lookup: account deletion removes every list in one
+        // batch, and a get() per list would exceed the rules' read budget.
+        allow delete: if isSelf(uid);
       }
 
       match /messages/{messageId} {
@@ -208,6 +263,7 @@ service cloud.firestore {
                       && request.auth.uid in chatMembers(chatId)
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.ciphertext is string
+                      && request.resource.data.ciphertext.size() <= MAX_CIPHERTEXT()
                       && request.resource.data.nonce is string
                       && request.resource.data.createdAt == request.time
                       && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt']);
@@ -229,6 +285,7 @@ service cloud.firestore {
                           request.resource.data.diff(resource.data).affectedKeys()
                             .hasOnly(['ciphertext', 'nonce', 'editedAt'])
                           && request.resource.data.ciphertext is string
+                          && request.resource.data.ciphertext.size() <= MAX_CIPHERTEXT()
                           && request.resource.data.nonce is string
                           && request.resource.data.editedAt == request.time
                           && request.time < resource.data.createdAt + duration.value(15, 'm')
@@ -244,6 +301,15 @@ service cloud.firestore {
         // Tombstones rather than removal, so replies and pagination survive.
         allow delete: if false;
       }
+    }
+
+    // The chat list's one query over every "Delete for me" list the caller
+    // owns, so a hidden newest message is not shown as the preview. The query
+    // filters on uid == me, and each doc may only name its own owner.
+    // (The doc id is unknown while a query is evaluated, so the check is on
+    // the field alone; the write rules keep the field equal to the id.)
+    match /{path=**}/hidden/{uid} {
+      allow list: if signedIn() && resource.data.uid == request.auth.uid;
     }
   }
 }

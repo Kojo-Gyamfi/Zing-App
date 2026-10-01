@@ -43,10 +43,30 @@ export async function disablePush(uid: string): Promise<void> {
   clearRegistered();
 
   const token = registered?.startsWith(`${uid}:`) ? registered.slice(uid.length + 1) : null;
-  await Promise.allSettled([
-    token ? unregisterPushToken(uid, token) : Promise.resolve(),
-    isSupported().then((ok) => (ok ? deleteToken(getMessaging(getApp())) : false)),
-  ]);
+  if (!token) return;
+
+  await Promise.allSettled([unregisterPushToken(uid, token), revokeToken()]);
+}
+
+/**
+ * Tell FCM to forget this browser's token. Messaging must be pointed at OUR
+ * worker first: left to itself, deleteToken() goes looking for a default
+ * /firebase-messaging-sw.js, gets a 404, and fails without revoking anything.
+ * getToken() with our registration returns the existing token and wires that up.
+ */
+async function revokeToken(): Promise<void> {
+  if (!(await isSupported().catch(() => false))) return;
+  if (Notification.permission !== 'granted') return;
+
+  const registration = await navigator.serviceWorker.getRegistration('/');
+  if (!registration) return;
+
+  const messaging = getMessaging(getApp());
+  await getToken(messaging, {
+    vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+    serviceWorkerRegistration: registration,
+  });
+  await deleteToken(messaging);
 }
 
 /** Opening a chat clears its notifications, like WhatsApp. */

@@ -62,10 +62,14 @@ export async function loadIdentity(): Promise<Identity | null> {
   return { privateKey, publicKey: await publicKeyFrom(privateKey) };
 }
 
-/** Sign-out. Leaves the Firestore backup intact so the passphrase still works. */
+/**
+ * Sign-out. Leaves the Firestore backup intact so the passphrase still works.
+ * The cached sealed chat keys go too: inert without the private key, but they
+ * belong to the account that just left this device.
+ */
 export async function clearIdentity(): Promise<void> {
   const instance = await database();
-  await instance.delete(STORE, RECORD);
+  await Promise.all([instance.delete(STORE, RECORD), instance.clear(KEYS_STORE)]);
 }
 
 /**

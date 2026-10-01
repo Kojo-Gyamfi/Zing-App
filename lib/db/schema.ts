@@ -92,6 +92,14 @@ export type MessageDoc = {
 /** Senders may edit for this long after sending, like WhatsApp. Mirrored in firestore.rules. */
 export const EDIT_WINDOW_MS = 15 * 60 * 1000;
 
+/**
+ * Longest message, in UTF-16 units (what a textarea's maxLength counts). At
+ * worst 3 bytes per unit, sealed and base64'd that is ~16,000 characters of
+ * ciphertext; firestore.rules caps ciphertext at 22,000 (MAX_CIPHERTEXT), so
+ * any 4,000-unit message fits with room to spare.
+ */
+export const MAX_MESSAGE_LENGTH = 4000;
+
 /** A message after local decryption -- never persisted in this form. */
 export type DecryptedMessage = {
   id: string;

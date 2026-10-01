@@ -13,6 +13,11 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
 
+    // The end-to-end tests' dev build and Playwright's output.
+    ".next-e2e/**",
+    "test-results/**",
+    "playwright-report/**",
+
     // Vendored libsodium builds, shipped verbatim for the service worker to
     // importScripts. Minified third-party code -- not ours to lint.
     "public/vendor/**",

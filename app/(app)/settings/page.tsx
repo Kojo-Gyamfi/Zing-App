@@ -11,10 +11,10 @@ import {
   updateKeyBackup,
   updateProfile,
 } from '@/lib/db/users';
-import { phoneDroppedFlag } from '@/lib/store/session';
 import { formatPhone, limitPhoneInput } from '@/lib/phone';
 import { enablePush, isIOS, pushState, type PushState } from '@/lib/push';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
+import { deleteAccount } from '@/lib/db/account';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -24,22 +24,38 @@ import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 const MIN_PASSPHRASE = 10;
 
 export default function SettingsPage() {
-  const { profile, identity, signOut, refreshProfile } = useSession();
+  const { user, profile, identity, signOut, refreshProfile } = useSession();
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function removeAccount() {
+    if (!user || !profile) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(user, profile.username);
+      // Forget the key on this device; the auth account is already gone.
+      await signOut();
+    } catch (cause) {
+      const code = (cause as { code?: string }).code ?? '';
+      setDeleteError(
+        code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request'
+          ? 'Confirm with Google to delete your account.'
+          : code === 'auth/user-mismatch'
+            ? 'Pick the Google account you use for Zing.'
+            : 'Could not delete your account. Check your connection and try again.',
+      );
+      setDeleting(false);
+    }
+  }
 
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
   const [phone, setPhone] = useState('');
-  // Only ever rendered client-side (the app layout waits for a ready session),
-  // so reading storage in the initializer cannot cause a hydration mismatch.
-  const [phoneError, setPhoneError] = useState<string | null>(() => {
-    try {
-      return profile && localStorage.getItem(phoneDroppedFlag(profile.uid))
-        ? 'Your number was removed while updating its format — it was invalid or another account already has it. Add it again if it is yours.'
-        : null;
-    } catch {
-      return null;
-    }
-  });
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -82,7 +98,7 @@ export default function SettingsPage() {
   const uid = profile?.uid;
   useEffect(() => {
     if (!uid) return;
-    void getPhone(uid, true).then((number) => setPhone(number ? formatPhone(number) : ''));
+    void getPhone(uid).then((number) => setPhone(number ? formatPhone(number) : ''));
     void getRecoveryBackup(uid)
       .then((doc) => setRecoveryCreated(doc ? (doc.createdAt?.toDate() ?? new Date()) : null))
       .catch(() => setRecoveryCreated(null));
@@ -155,11 +171,6 @@ export default function SettingsPage() {
 
     try {
       await savePhone(profile.uid, phone);
-      try {
-        localStorage.removeItem(phoneDroppedFlag(profile.uid));
-      } catch {
-        // Nothing to clear.
-      }
     } catch (cause) {
       const code = (cause as Error).message;
       setPhoneError(
@@ -424,6 +435,53 @@ export default function SettingsPage() {
           ) : (
             <Button variant="danger" onClick={() => setConfirmingSignOut(true)}>
               Sign out
+            </Button>
+          )}
+
+          {confirmingDelete ? (
+            <div className="space-y-3 rounded-2xl border border-danger/40 bg-surface p-4">
+              <p className="text-[14px] font-medium leading-relaxed text-ink">
+                Delete your Zing account?
+              </p>
+              <p className="text-[13px] leading-relaxed text-muted">
+                Your profile, @{profile.username}, phone number, key backups and settings are
+                erased, and your handle becomes free for someone else. Messages you sent stay in
+                the other person&apos;s chats. You cannot read any of your chats again — this
+                cannot be undone.
+              </p>
+              <Field
+                label={`Type ${profile.username} to confirm`}
+                value={deleteConfirm}
+                onChange={(event) => setDeleteConfirm(event.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                error={deleteError}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setConfirmingDelete(false);
+                    setDeleteConfirm('');
+                    setDeleteError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  busy={deleting}
+                  disabled={deleteConfirm.trim().toLowerCase() !== profile.username}
+                  onClick={() => void removeAccount()}
+                >
+                  Delete forever
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button variant="danger" onClick={() => setConfirmingDelete(true)}>
+              Delete my account
             </Button>
           )}
         </section>
