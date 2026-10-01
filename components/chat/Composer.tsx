@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { EmojiPanel } from './EmojiPanel';
 
 /** What the next send means, besides "a new message". */
 export type ComposerContext =
@@ -23,6 +24,10 @@ export function Composer({
 }) {
   const [text, setText] = useState('');
   const box = useRef<HTMLTextAreaElement>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  // Where the caret was last. On a phone the box loses focus while the emoji
+  // panel is open (that is what hides the keyboard), so this is where taps land.
+  const caret = useRef<{ start: number; end: number } | null>(null);
 
   // Starting an edit loads that message's text; leaving one clears the box
   // so the old text is not accidentally sent as a new message. Adjusted
@@ -60,11 +65,76 @@ export function Composer({
     // Cleared before the write resolves: the optimistic bubble is already on
     // screen via the local cache, so waiting would only add lag.
     setText('');
+    caret.current = null;
     requestAnimationFrame(grow);
     void onSend(value);
   }
 
   const editing = context?.kind === 'edit';
+
+  const isTouch = () => 'ontouchstart' in window;
+
+  function rememberCaret() {
+    const node = box.current;
+    if (node) caret.current = { start: node.selectionStart, end: node.selectionEnd };
+  }
+
+  /** The remembered caret, or the end of the text; clamped in case the text changed since. */
+  function currentCaret() {
+    const fallback = { start: text.length, end: text.length };
+    const { start, end } = caret.current ?? fallback;
+    return { start: Math.min(start, text.length), end: Math.min(end, text.length) };
+  }
+
+  /** Replace the selection (or nothing, at the caret) and put the caret after it. */
+  function replaceSelection(insert: string, deleteBefore = 0) {
+    const { start, end } = currentCaret();
+    const from = Math.max(0, start === end ? start - deleteBefore : start);
+    const next = text.slice(0, from) + insert + text.slice(end);
+    const position = from + insert.length;
+
+    setText(next);
+    caret.current = { start: position, end: position };
+    if (!editing && insert) onTyping();
+
+    requestAnimationFrame(() => {
+      grow();
+      const node = box.current;
+      if (!node) return;
+      // Refocusing on a phone would bring the keyboard back over the panel.
+      if (!isTouch()) node.focus();
+      node.setSelectionRange(position, position);
+    });
+  }
+
+  function insertEmoji(emoji: string) {
+    replaceSelection(emoji);
+  }
+
+  /** Backspace that removes a whole emoji (👨‍👩‍👧 is several code points), not half of one. */
+  function backspace() {
+    const { start, end } = currentCaret();
+    if (start !== end) return replaceSelection('');
+    if (start === 0) return;
+
+    const before = text.slice(0, start);
+    const segments = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(before)];
+    const last = segments.at(-1)?.segment ?? '';
+    replaceSelection('', last.length);
+  }
+
+  function toggleEmoji() {
+    if (emojiOpen) {
+      setEmojiOpen(false);
+      // Back to typing, like WhatsApp's keyboard button.
+      box.current?.focus();
+      return;
+    }
+    rememberCaret();
+    setEmojiOpen(true);
+    // Dismiss the on-screen keyboard; the panel takes its place.
+    if (isTouch()) box.current?.blur();
+  }
 
   return (
     // Bottom padding is whichever is larger: breathing room, or the home
@@ -99,35 +169,71 @@ export function Composer({
       )}
 
       <div className="flex items-end gap-2">
-        <textarea
-          ref={box}
-          rows={1}
-          value={text}
-          disabled={disabled}
-          onChange={(event) => {
-            setText(event.target.value);
-            grow();
-            if (!editing) onTyping();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape' && context) {
-              event.preventDefault();
-              onCancelContext?.();
-              return;
-            }
-            // Enter sends on a physical keyboard; Shift+Enter makes a new line.
-            // On touch the on-screen return key inserts a newline as expected.
-            if (event.key === 'Enter' && !event.shiftKey && !('ontouchstart' in window)) {
-              event.preventDefault();
-              submit();
-            }
-          }}
-          placeholder={disabled ? 'Securing this chat…' : 'Message'}
-          /* 16px keeps iOS from zooming the viewport when the field takes focus. */
-          className="max-h-[140px] min-h-[44px] flex-1 resize-none rounded-2xl bg-elevated px-4 py-3
-            text-[16px] leading-snug text-ink placeholder:text-faint
-            focus:outline-none disabled:opacity-50"
-        />
+        <div className="flex min-w-0 flex-1 items-end rounded-2xl bg-elevated">
+          <button
+            type="button"
+            onClick={toggleEmoji}
+            disabled={disabled}
+            aria-label={emojiOpen ? 'Show keyboard' : 'Emoji'}
+            aria-expanded={emojiOpen}
+            className="grid size-11 shrink-0 place-items-center rounded-full text-muted
+              transition-colors hover:text-ink disabled:opacity-50"
+          >
+            {emojiOpen ? (
+              <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="2.5" y="6" width="19" height="12" rx="2" />
+                <path d="M6 9.5h.01M9 9.5h.01M12 9.5h.01M15 9.5h.01M18 9.5h.01M6 12.5h.01M9 12.5h.01M12 12.5h.01M15 12.5h.01M18 12.5h.01M8 15h8" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9.5" />
+                <path d="M8 14.5s1.5 2 4 2 4-2 4-2" />
+                <path d="M9 9.5h.01M15 9.5h.01" strokeWidth="2.6" />
+              </svg>
+            )}
+          </button>
+          <textarea
+            ref={box}
+            rows={1}
+            value={text}
+            disabled={disabled}
+            onChange={(event) => {
+              setText(event.target.value);
+              rememberCaret();
+              grow();
+              if (!editing) onTyping();
+            }}
+            onSelect={rememberCaret}
+            onBlur={rememberCaret}
+            // Tapping the box on a phone means "keyboard please": the panel gives way.
+            onFocus={() => {
+              if (emojiOpen && isTouch()) setEmojiOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && emojiOpen) {
+                event.preventDefault();
+                setEmojiOpen(false);
+                return;
+              }
+              if (event.key === 'Escape' && context) {
+                event.preventDefault();
+                onCancelContext?.();
+                return;
+              }
+              // Enter sends on a physical keyboard; Shift+Enter makes a new line.
+              // On touch the on-screen return key inserts a newline as expected.
+              if (event.key === 'Enter' && !event.shiftKey && !('ontouchstart' in window)) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            placeholder={disabled ? 'Securing this chat…' : 'Message'}
+            /* 16px keeps iOS from zooming the viewport when the field takes focus. */
+            className="max-h-[140px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-3 pr-4
+              text-[16px] leading-snug text-ink placeholder:text-faint
+              focus:outline-none disabled:opacity-50"
+          />
+        </div>
 
         <button
           onClick={submit}
@@ -155,6 +261,8 @@ export function Composer({
           )}
         </button>
       </div>
+
+      {emojiOpen && <EmojiPanel onPick={insertEmoji} onBackspace={backspace} />}
     </div>
   );
 }
