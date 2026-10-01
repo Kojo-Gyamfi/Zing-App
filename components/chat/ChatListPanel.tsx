@@ -11,7 +11,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { NotificationPrompt } from '@/components/NotificationPrompt';
 
 export function ChatListPanel() {
-  const { rows, loading } = useChatList();
+  const { rows, loading, hasMore, loadMore } = useChatList();
   const profile = useSession((state) => state.profile);
   const pathname = usePathname();
   const [filter, setFilter] = useState('');
@@ -58,7 +58,17 @@ export function ChatListPanel() {
 
       <NotificationPrompt />
 
-      <div className="min-h-0 flex-1 overflow-y-auto scroll-thin">
+      <div
+        className="min-h-0 flex-1 overflow-y-auto scroll-thin"
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          // Next page a screen before the end, so it is there by the time the
+          // reader gets to it.
+          if (hasMore && node.scrollHeight - node.scrollTop - node.clientHeight < node.clientHeight) {
+            loadMore();
+          }
+        }}
+      >
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-muted">
             <Spinner />
@@ -87,7 +97,7 @@ export function ChatListPanel() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="truncate font-semibold">
-                          {row.peer?.displayName ?? 'Unknown'}
+                          {row.peer?.displayName ?? (row.peerDeleted ? 'Deleted account' : 'Unknown')}
                         </span>
                         <span
                           className={`shrink-0 text-[12px] ${row.unread ? 'text-zing' : 'text-faint'}`}

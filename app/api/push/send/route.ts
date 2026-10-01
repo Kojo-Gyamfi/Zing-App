@@ -16,6 +16,12 @@ export const runtime = 'nodejs';
  * This route can read none of what it forwards.
  */
 export async function POST(request: Request) {
+  // End-to-end tests run against the emulators, which have no FCM. Never let
+  // a test reach the real project's push service.
+  if (process.env.NEXT_PUBLIC_USE_EMULATORS === '1') {
+    return NextResponse.json({ sent: 0 });
+  }
+
   const bearer = request.headers.get('authorization');
   const idToken = bearer?.startsWith('Bearer ') ? bearer.slice(7) : null;
   if (!idToken) {
@@ -29,14 +35,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
-  const { chatId, ciphertext, nonce } = (await request.json()) as {
-    chatId?: string;
-    ciphertext?: string;
-    nonce?: string;
-  };
-
-  if (!chatId || !ciphertext || !nonce) {
+  let body: { chatId?: unknown; ciphertext?: unknown; nonce?: unknown };
+  try {
+    body = await request.json();
+  } catch {
     return NextResponse.json({ error: 'bad request' }, { status: 400 });
+  }
+  const { chatId, ciphertext, nonce } = body;
+
+  if (typeof chatId !== 'string' || typeof ciphertext !== 'string' || typeof nonce !== 'string') {
+    return NextResponse.json({ error: 'bad request' }, { status: 400 });
+  }
+  // Two uids joined by "_". Anything else -- a "/" especially -- would let the
+  // id name some other document path.
+  if (!/^[A-Za-z0-9]{1,128}_[A-Za-z0-9]{1,128}$/.test(chatId)) {
+    return NextResponse.json({ error: 'bad request' }, { status: 400 });
+  }
+
+  if (!(await withinRateLimit(senderUid))) {
+    return NextResponse.json({ error: 'rate limited' }, { status: 429 });
   }
 
   const chat = await adminDb().doc(`chats/${chatId}`).get();
@@ -104,4 +121,37 @@ export async function POST(request: Request) {
   );
 
   return NextResponse.json({ sent: response.successCount });
+}
+
+/** Pushes one account may trigger per minute: well above real chatting. */
+const PUSH_LIMIT = 30;
+const WINDOW_MS = 60_000;
+
+/**
+ * Per-sender rate limit, so one account cannot buzz someone's phone in a
+ * loop. Kept in Firestore because serverless instances share no memory. The
+ * pushLimits collection has no client rule, so only this route (admin
+ * credentials) can read or write it.
+ */
+async function withinRateLimit(uid: string): Promise<boolean> {
+  const ref = adminDb().doc(`pushLimits/${uid}`);
+  try {
+    return await adminDb().runTransaction(async (transaction) => {
+      const now = Date.now();
+      const current = (await transaction.get(ref)).data() as
+        | { windowStart: number; count: number }
+        | undefined;
+
+      if (!current || now - current.windowStart >= WINDOW_MS) {
+        transaction.set(ref, { windowStart: now, count: 1 });
+        return true;
+      }
+      if (current.count >= PUSH_LIMIT) return false;
+      transaction.update(ref, { count: current.count + 1 });
+      return true;
+    });
+  } catch {
+    // The limiter failing must not silence real messages.
+    return true;
+  }
 }

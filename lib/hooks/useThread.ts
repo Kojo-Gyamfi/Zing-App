@@ -14,7 +14,7 @@ import {
   loadOlderMessages,
   PAGE_SIZE,
 } from '@/lib/db/messages';
-import { markRead, subscribeChat } from '@/lib/db/chats';
+import { markRead, onConversationKeyReady, subscribeChat } from '@/lib/db/chats';
 import { needsReadReceipt } from '@/lib/receipts';
 import { notifyPeers } from '@/lib/notify';
 import { subscribePresence, subscribeTyping, setTyping, type Presence } from '@/lib/db/presence';
@@ -29,6 +29,7 @@ const TYPING_THROTTLE = 2000;
 export function useThread(chatId: string, peerUid: string | null) {
   const { user, identity } = useSession();
   const keyFor = useKeys((state) => state.get);
+  const forgetMiss = useKeys((state) => state.forgetMiss);
   const loadProfile = useProfiles((state) => state.load);
 
   const [conversationKey, setConversationKey] = useState<Uint8Array | null>(null);
@@ -67,15 +68,36 @@ export function useThread(chatId: string, peerUid: string | null) {
   useEffect(() => {
     if (!user || !identity) return;
     let live = true;
+    let stopWatching: (() => void) | null = null;
 
     void keyFor(chatId, user.uid, identity).then((key) => {
-      if (live) setConversationKey(key);
+      if (!live) return;
+      if (key) {
+        setConversationKey(key);
+        return;
+      }
+      // Not written yet: the other person opened this chat a moment ago and
+      // their app is still sealing our copy. Wait for it rather than sitting
+      // on "Decrypting" until the chat is reopened.
+      stopWatching = onConversationKeyReady(chatId, user.uid, () => {
+        forgetMiss(chatId);
+        void keyFor(chatId, user.uid, identity).then((ready) => {
+          if (live && ready) {
+            setConversationKey(ready);
+            stopWatching?.();
+            stopWatching = null;
+          }
+        });
+      });
     });
 
     return () => {
       live = false;
+      stopWatching?.();
     };
-  }, [chatId, user, identity, keyFor]);
+  }, [chatId, user, identity, keyFor, forgetMiss]);
+
+  const peerDeleted = useProfiles((state) => (peerUid ? Boolean(state.missing[peerUid]) : false));
 
   useEffect(() => {
     if (!peerUid) return;
@@ -324,6 +346,8 @@ export function useThread(chatId: string, peerUid: string | null) {
         )
       : thread,
     peer,
+    /** The other person deleted their account: the thread is read-only. */
+    peerDeleted,
     presence,
     peerTyping,
     peerReadAt,

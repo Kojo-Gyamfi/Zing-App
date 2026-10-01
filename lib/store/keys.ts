@@ -27,6 +27,7 @@ type KeyState = {
   pending: Record<string, Promise<Uint8Array | null>>;
   misses: Record<string, number>;
   get: (chatId: string, uid: string, identity: Identity) => Promise<Uint8Array | null>;
+  forgetMiss: (chatId: string) => void;
   clear: () => void;
 };
 
@@ -47,23 +48,38 @@ export const useKeys = create<KeyState>((set, get) => ({
     const inFlight = get().pending[chatId];
     if (inFlight) return inFlight;
 
-    const request = loadConversationKey(chatId, uid, identity).then((key) => {
-      if (key) {
-        set((state) => ({ keys: { ...state.keys, [chatId]: key } }));
-      } else {
-        set((state) => ({ misses: { ...state.misses, [chatId]: Date.now() } }));
-      }
+    const settle = (key: Uint8Array | null) => {
       set((state) => {
         const pending = { ...state.pending };
         delete pending[chatId];
-        return { pending };
+        return key
+          ? { pending, keys: { ...state.keys, [chatId]: key } }
+          : { pending, misses: { ...state.misses, [chatId]: Date.now() } };
       });
       return key;
-    });
+    };
+
+    // A failed read (offline, nothing cached) counts as a miss. Left pending,
+    // every later ask in the session would get the same rejection.
+    const request = loadConversationKey(chatId, uid, identity).then(settle, () => settle(null));
 
     set((state) => ({ pending: { ...state.pending, [chatId]: request } }));
     return request;
   },
+
+  /**
+   * The key doc has just appeared: drop the remembered miss -- and any request
+   * still in flight from before it existed, which would answer null -- so the
+   * next get() reads it fresh.
+   */
+  forgetMiss: (chatId) =>
+    set((state) => {
+      const misses = { ...state.misses };
+      const pending = { ...state.pending };
+      delete misses[chatId];
+      delete pending[chatId];
+      return { misses, pending };
+    }),
 
   clear: () => set({ keys: {}, pending: {}, misses: {} }),
 }));

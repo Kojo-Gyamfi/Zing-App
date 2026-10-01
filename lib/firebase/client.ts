@@ -1,12 +1,14 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, type Auth } from 'firebase/auth';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
+import { getAuth, connectAuthEmulator, GoogleAuthProvider, type Auth } from 'firebase/auth';
 import {
   initializeFirestore,
+  connectFirestoreEmulator,
   persistentLocalCache,
   persistentMultipleTabManager,
   type Firestore,
 } from 'firebase/firestore';
-import { getDatabase, type Database } from 'firebase/database';
+import { getDatabase, connectDatabaseEmulator, type Database } from 'firebase/database';
 
 /**
  * Firebase, initialised once per browser.
@@ -26,8 +28,37 @@ const config = {
   databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
 };
 
+/**
+ * Local Firebase Emulator Suite instead of the real project. Set only by the
+ * end-to-end tests (see playwright.config.ts) -- never in .env.local.
+ */
+const USE_EMULATORS = process.env.NEXT_PUBLIC_USE_EMULATORS === '1';
+
+const RECAPTCHA_SITE_KEY = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+
 function app(): FirebaseApp {
-  return getApps().length ? getApp() : initializeApp(config);
+  if (getApps().length) return getApp();
+
+  const instance = initializeApp(config);
+
+  // App Check: Firestore, RTDB and Auth only answer requests that carry a
+  // token proving they came from this app on a real browser, so a script with
+  // the (public) config above cannot use the project. Must run before any
+  // other Firebase service is touched. Enforcement is switched on per service
+  // in the Firebase Console.
+  if (typeof window !== 'undefined' && RECAPTCHA_SITE_KEY && !USE_EMULATORS) {
+    if (process.env.NODE_ENV === 'development') {
+      // Prints a debug token to the console on first run; register it under
+      // App Check -> Apps -> Manage debug tokens to use localhost/ngrok.
+      (self as typeof self & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    }
+    initializeAppCheck(instance, {
+      provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+      isTokenAutoRefreshEnabled: true,
+    });
+  }
+
+  return instance;
 }
 
 let firestore: Firestore | null = null;
@@ -42,17 +73,32 @@ export function db(): Firestore {
     firestore = initializeFirestore(app(), {
       localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
     });
+    if (USE_EMULATORS) connectFirestoreEmulator(firestore, '127.0.0.1', 8080);
   }
   return firestore;
 }
 
+let authInstance: Auth | null = null;
+
 export function auth(): Auth {
-  return getAuth(app());
+  if (!authInstance) {
+    authInstance = getAuth(app());
+    if (USE_EMULATORS) {
+      connectAuthEmulator(authInstance, 'http://127.0.0.1:9099', { disableWarnings: true });
+    }
+  }
+  return authInstance;
 }
+
+let database: Database | null = null;
 
 /** Typing and presence only -- Firestore has no onDisconnect equivalent. */
 export function rtdb(): Database {
-  return getDatabase(app());
+  if (!database) {
+    database = getDatabase(app());
+    if (USE_EMULATORS) connectDatabaseEmulator(database, '127.0.0.1', 9000);
+  }
+  return database;
 }
 
 export const googleProvider = new GoogleAuthProvider();

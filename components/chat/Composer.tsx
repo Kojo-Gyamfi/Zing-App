@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { EmojiPanel } from './EmojiPanel';
+import { MAX_MESSAGE_LENGTH } from '@/lib/db/schema';
 
 /** What the next send means, besides "a new message". */
 export type ComposerContext =
@@ -13,12 +14,15 @@ export function Composer({
   onSend,
   onTyping,
   disabled,
+  disabledText,
   context = null,
   onCancelContext,
 }: {
   onSend: (text: string) => void | Promise<void>;
   onTyping: () => void;
   disabled?: boolean;
+  /** Placeholder while disabled; defaults to the key-exchange wait. */
+  disabledText?: string;
   context?: ComposerContext;
   onCancelContext?: () => void;
 }) {
@@ -91,6 +95,8 @@ export function Composer({
     const { start, end } = currentCaret();
     const from = Math.max(0, start === end ? start - deleteBefore : start);
     const next = text.slice(0, from) + insert + text.slice(end);
+    // maxLength only stops typing; an emoji tap would sail past it.
+    if (next.length > MAX_MESSAGE_LENGTH) return;
     const position = from + insert.length;
 
     setText(next);
@@ -227,7 +233,8 @@ export function Composer({
                 submit();
               }
             }}
-            placeholder={disabled ? 'Securing this chat…' : 'Message'}
+            placeholder={disabled ? (disabledText ?? 'Securing this chat…') : 'Message'}
+            maxLength={MAX_MESSAGE_LENGTH}
             /* 16px keeps iOS from zooming the viewport when the field takes focus. */
             className="max-h-[140px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-3 pr-4
               text-[16px] leading-snug text-ink placeholder:text-faint
@@ -261,6 +268,14 @@ export function Composer({
           )}
         </button>
       </div>
+
+      {text.length > MAX_MESSAGE_LENGTH - 500 && (
+        <p
+          className={`mt-1 text-right text-[12px] ${text.length >= MAX_MESSAGE_LENGTH ? 'text-danger' : 'text-faint'}`}
+        >
+          {MAX_MESSAGE_LENGTH - text.length} characters left
+        </p>
+      )}
 
       {emojiOpen && <EmojiPanel onPick={insertEmoji} onBackspace={backspace} />}
     </div>

@@ -17,7 +17,7 @@ import { rtdb } from '@/lib/firebase/client';
 export type Presence = { online: boolean; lastSeen: number | null };
 
 /** Call once after sign-in. Returns a teardown for sign-out. */
-export function trackPresence(uid: string): () => void {
+export function trackPresence(uid: string): (markOffline?: boolean) => void {
   const status = ref(rtdb(), `presence/${uid}`);
   const connected = ref(rtdb(), '.info/connected');
 
@@ -31,9 +31,10 @@ export function trackPresence(uid: string): () => void {
       .then(() => set(status, { online: true, lastSeen: serverTimestamp() }));
   });
 
-  return () => {
+  // markOffline false: the account is gone, there is no node left to write.
+  return (markOffline = true) => {
     stop();
-    void set(status, { online: false, lastSeen: Date.now() });
+    if (markOffline) void set(status, { online: false, lastSeen: Date.now() }).catch(() => undefined);
   };
 }
 
@@ -70,4 +71,23 @@ export function subscribeTyping(
     const at = snapshot.val() as number | null;
     onChange(at !== null && Date.now() - at < TYPING_TTL);
   });
+}
+
+/**
+ * Account deletion: drop the presence node and the pending onDisconnect write,
+ * which would otherwise recreate it the moment this socket closes.
+ */
+export async function forgetPresence(uid: string): Promise<void> {
+  const status = ref(rtdb(), `presence/${uid}`);
+  await onDisconnect(status).cancel();
+  await remove(status);
+}
+
+/**
+ * Whether this device can reach Firebase right now. RTDB's own connection
+ * flag is the honest signal: navigator.onLine says "a network exists", not
+ * "the database is reachable" (captive portals, dead Wi-Fi).
+ */
+export function subscribeConnection(onChange: (connected: boolean) => void) {
+  return onValue(ref(rtdb(), '.info/connected'), (snapshot) => onChange(snapshot.val() === true));
 }

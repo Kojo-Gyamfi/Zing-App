@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // The end-to-end tests run their own dev server against the Firebase
+  // emulators; a separate build dir lets it run beside `npm run dev`.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+
   // ngrok tunnel for testing on a real phone -- dev server only, ignored in production.
   allowedDevOrigins: ['untreacherous-leontine-nonpejoratively.ngrok-free.dev'],
 

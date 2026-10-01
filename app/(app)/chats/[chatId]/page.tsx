@@ -15,6 +15,7 @@ import { tickState } from '@/components/chat/Ticks';
 import { ChatInfoSheet } from '@/components/chat/ChatInfoSheet';
 import type { DecryptedMessage } from '@/lib/db/schema';
 import { clearChatNotifications } from '@/lib/push';
+import { acceptPeerKey, peerKeyChanged } from '@/lib/keyWatch';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
@@ -34,6 +35,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const {
     messages,
     peer,
+    peerDeleted,
     presence,
     peerTyping,
     loading,
@@ -80,6 +82,14 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+
+  // Their public key, checked against the one this device saw before. The
+  // check records a first-seen key, so it is keyed on the profile alone.
+  const keyChanged = useMemo(
+    () => (peer ? peerKeyChanged(peer.uid, peer.publicKey) : false),
+    [peer],
+  );
+  const [acceptedKey, setAcceptedKey] = useState<string | null>(null);
 
   const groups = useMemo(() => groupByDay(messages), [messages]);
   const byId = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -157,7 +167,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             online={presence.online}
           />
           <div className="min-w-0">
-            <p className="truncate font-semibold">{peer?.displayName ?? 'Loading'}</p>
+            <p className="truncate font-semibold">{peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Loading')}</p>
             <p className="flex items-center gap-1.5 truncate text-[12px] text-muted">
               {peerTyping ? (
                 <>
@@ -171,6 +181,33 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           </div>
         </button>
       </header>
+
+      {keyChanged && peer && acceptedKey !== peer.publicKey && (
+        <div className="flex items-start gap-3 border-b border-line bg-surface px-4 py-3">
+          <p className="flex-1 text-[13px] leading-relaxed text-muted">
+            <span className="font-medium text-ink">{peer.displayName}&apos;s security key changed.</span>{' '}
+            That should never happen on Zing. Verify encryption with them before sending anything
+            sensitive.
+          </p>
+          <div className="flex shrink-0 gap-1">
+            <button
+              onClick={() => setInfoOpen(true)}
+              className="h-8 rounded-full px-3 text-[13px] font-medium text-zing"
+            >
+              Verify
+            </button>
+            <button
+              onClick={() => {
+                acceptPeerKey(peer.uid, peer.publicKey);
+                setAcceptedKey(peer.publicKey);
+              }}
+              className="h-8 rounded-full px-3 text-[13px] text-muted"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
 
       <div
         ref={scroller}
@@ -239,7 +276,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       <Composer
         onSend={handleSend}
         onTyping={ping}
-        disabled={!loading && !conversationKey}
+        disabled={peerDeleted || (!loading && !conversationKey)}
+        disabledText={peerDeleted ? 'This account was deleted' : undefined}
         context={composerContext}
         onCancelContext={() => setComposerContext(null)}
       />

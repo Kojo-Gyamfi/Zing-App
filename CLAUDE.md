@@ -19,8 +19,10 @@ npm run dev          # dev server (Turbopack)
 npm run build        # production build — also runs a full typecheck
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
-npm test             # vitest run
+npm test             # vitest run (unit tests only)
 npm run test:watch
+npm run test:rules   # Firestore rules on the emulator (needs Java 21)
+npm run test:e2e     # Playwright, two browsers, against the emulators (needs Java 21)
 
 npx vitest run -t "restores the private key"   # one test by name
 npx vitest run lib/crypto/crypto.test.ts       # one file
@@ -105,17 +107,33 @@ rather than letting every decryption fail mysteriously.
   worker runs, putting ciphertext on someone's lock screen.
 - **Sealed conversation keys are cached to IndexedDB** so `public/sw.js` can decrypt notification
   previews with no network. Unsealed keys stay in memory (`lib/store/keys.ts`) and never touch disk.
+- **Other per-member state on the chat doc follows the receipt pattern**: `unread.{uid}` (sender adds
+  exactly 1, reader resets their own to 0) and `sent.{uid}` (true once you have sent; both true is
+  what lets each see the other's phone number). The rules hold each member to their own key.
+- **A new chat doc starts empty** — the create rule refuses any `sent`, receipts, badge or preview,
+  or one member could pre-claim things about the other.
+- **Hidden ("Delete for me") lists carry a `uid` field** so the chat list can fetch all of one
+  user's lists in a single collection-group query.
+- **A key doc can appear after its chat** (see above), so anything that loads a conversation key
+  must cope with "not yet" — `useThread` watches for it with `onConversationKeyReady`.
+- **Optional services are env-gated**: App Check (`NEXT_PUBLIC_RECAPTCHA_SITE_KEY`) and Sentry
+  (`NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN`) do nothing until set, and the CSP in `proxy.ts` only
+  opens their hosts then. Sentry is configured in `lib/monitoring.ts` to send errors only — never
+  breadcrumbs, inputs or request bodies.
 - Chat components are client components; live listeners only exist in a browser.
 
 ### Security rules are the authorization layer
 
 `firestore.rules` and `database.rules.json`. Browsers talk straight to the database, so anything not
-forbidden there is public. Changing the data model means changing the rules in the same pass.
+forbidden there is public. Changing the data model means changing the rules in the same pass — and
+adding a case to `tests/rules/firestore.test.ts`.
 
 ## Verifying a change
 
-`npm test` covers crypto round-trips, passphrase recovery on a simulated fresh device, and safety
-numbers. Beyond that, the check that actually validates the product: send a message, open Firestore
+`npm test` covers crypto round-trips, passphrase and recovery-key restore on a simulated fresh
+device, phone normalization and receipts. `npm run test:rules` proves the rules allow the app and
+refuse a hand-rolled client. `npm run test:e2e` drives the whole product in two browsers. CI runs all
+of them. Beyond that, the check that actually validates the product: send a message, open Firestore
 in the Firebase Console, and confirm the `ciphertext` field is unreadable.
 
 Other manual checks live in README.md ("Testing it works").

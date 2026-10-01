@@ -17,6 +17,18 @@ export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
   const isDev = process.env.NODE_ENV === 'development';
   const authDomain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN;
+  // Optional services, allowed only when configured.
+  const sentry = process.env.NEXT_PUBLIC_SENTRY_DSN
+    ? ' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io'
+    : '';
+  // App Check's reCAPTCHA v3: the script itself loads under 'strict-dynamic',
+  // but it talks to and frames google.com.
+  const recaptcha = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+  const recaptchaConnect = recaptcha ? ' https://www.google.com https://www.gstatic.com' : '';
+  const recaptchaFrame = recaptcha ? ' https://www.google.com https://recaptcha.google.com' : '';
+  // End-to-end tests only: the local Firebase emulators.
+  const emulators =
+    process.env.NEXT_PUBLIC_USE_EMULATORS === '1' ? ' http://127.0.0.1:* ws://127.0.0.1:*' : '';
 
   const csp = `
     default-src 'self';
@@ -24,8 +36,8 @@ export function proxy(request: NextRequest) {
     style-src 'self' 'unsafe-inline';
     img-src 'self' blob: data: https://*.googleusercontent.com;
     font-src 'self';
-    connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app;
-    frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://apis.google.com${authDomain ? ` https://${authDomain}` : ''};
+    connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.firebasedatabase.app wss://*.firebasedatabase.app${sentry}${recaptchaConnect}${emulators};
+    frame-src 'self' https://*.firebaseapp.com https://accounts.google.com https://apis.google.com${authDomain ? ` https://${authDomain}` : ''}${recaptchaFrame}${emulators};
     worker-src 'self';
     manifest-src 'self';
     object-src 'none';
