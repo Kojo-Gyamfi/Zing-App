@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { isIOS, isStandalone, enablePush, registerServiceWorker } from '@/lib/push';
+import { isIOS, isStandalone, refreshPush, registerServiceWorker } from '@/lib/push';
 import { useSession } from '@/lib/store/session';
 import { Button } from '@/components/ui/Button';
 
@@ -85,10 +85,12 @@ export function InstallCoach() {
     return () => window.removeEventListener('beforeinstallprompt', capture);
   }, []);
 
-  // Once installed, the useful nudge is notifications rather than installing.
+  // Keep this device's push token current once notifications are on. Asking
+  // for permission happens from the chat list banner or Settings, never here.
+  const uid = user?.uid;
   useEffect(() => {
-    if (installed && user) void enablePush(user.uid);
-  }, [installed, user]);
+    if (uid) void refreshPush(uid);
+  }, [uid]);
 
   if (installed || dismissed) return null;
 

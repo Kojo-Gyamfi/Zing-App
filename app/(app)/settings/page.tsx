@@ -13,6 +13,7 @@ import {
 } from '@/lib/db/users';
 import { phoneDroppedFlag } from '@/lib/store/session';
 import { formatPhone, limitPhoneInput } from '@/lib/phone';
+import { enablePush, isIOS, pushState, type PushState } from '@/lib/push';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
@@ -56,6 +57,26 @@ export default function SettingsPage() {
   const [newRecoveryKey, setNewRecoveryKey] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
+
+  const [push, setPush] = useState<PushState | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void pushState().then((next) => {
+      if (live) setPush(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  async function turnOnPush() {
+    if (!profile) return;
+    setPushBusy(true);
+    const outcome = await enablePush(profile.uid);
+    setPushBusy(false);
+    setPush(outcome === 'granted' ? 'granted' : outcome === 'denied' ? 'denied' : 'unsupported');
+  }
 
   // The number lives in its own doc, not the public profile.
   const uid = profile?.uid;
@@ -231,6 +252,39 @@ export default function SettingsPage() {
               Messages are sealed on this device before they are sent. We store them as ciphertext
               and hold no key that opens them — which also means we cannot recover them for you.
             </p>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">
+            Notifications
+          </h2>
+
+          <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+            <div>
+              <p className="text-[14px] font-medium text-ink">
+                Message notifications
+                {push === 'granted' && <span className="ml-2 text-[13px] text-zing">On</span>}
+              </p>
+              <p className="mt-1 text-[12px] leading-relaxed text-faint">
+                {push === null
+                  ? 'Checking…'
+                  : push === 'granted'
+                    ? 'This device buzzes when a message arrives. The preview is decrypted here — the server only forwards ciphertext.'
+                    : push === 'denied'
+                      ? 'Blocked for Zing in this browser. Tap the icon beside the address bar (or open site settings), allow Notifications, then reload.'
+                      : push === 'unsupported'
+                        ? isIOS()
+                          ? 'On iPhone, add Zing to your Home Screen first (Share → Add to Home Screen), then turn them on from the installed app.'
+                          : 'This browser cannot show notifications.'
+                        : 'Get a notification on this device when someone messages you.'}
+              </p>
+            </div>
+            {push === 'default' && (
+              <Button onClick={() => void turnOnPush()} busy={pushBusy}>
+                Turn on notifications
+              </Button>
+            )}
           </div>
         </section>
 

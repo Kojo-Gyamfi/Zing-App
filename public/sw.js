@@ -148,20 +148,37 @@ self.addEventListener('push', (event) => {
       const { chatId, senderName, ciphertext, nonce } = message;
       if (!chatId) return;
 
-      // Say nothing if the app is already on screen -- the message is visibly
-      // arriving in the thread.
+      // Say nothing only when this very conversation is on screen -- the
+      // message is visibly arriving there. Another chat open, the chat list,
+      // or the app in the background all still get the buzz, like WhatsApp.
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (clients.some((client) => client.visibilityState === 'visible')) return;
+      const watching = clients.some(
+        (client) =>
+          client.visibilityState === 'visible' &&
+          new URL(client.url).pathname === `/chats/${chatId}`,
+      );
+      if (watching) return;
 
-      const text = await decryptPreview(chatId, ciphertext, nonce);
+      // Null when this device cannot open it, or when the message was too long
+      // to fit in a push and was sent without its ciphertext.
+      const text = ciphertext && nonce ? await decryptPreview(chatId, ciphertext, nonce) : null;
+      const line = text ?? 'New message';
 
-      await self.registration.showNotification(senderName || 'Zing', {
-        body: text ?? 'Sent you a message',
+      // One notification per conversation, growing as messages arrive:
+      // "Kwame · 3 messages" with the latest few lines underneath.
+      const [previous] = await self.registration.getNotifications({ tag: chatId });
+      const count = (previous?.data?.count ?? 0) + 1;
+      const lines = [...(previous?.data?.lines ?? []), line].slice(-5);
+      const name = senderName || 'Zing';
+
+      await self.registration.showNotification(count > 1 ? `${name} · ${count} messages` : name, {
+        body: lines.join('\n'),
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        tag: chatId,          // one notification per conversation, not per message
-        renotify: true,
-        data: { chatId },
+        tag: chatId,
+        renotify: true,       // buzz again for each new message, not just the first
+        timestamp: Date.now(),
+        data: { chatId, count, lines },
       });
     })(),
   );

@@ -67,9 +67,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ sent: 0 });
   }
 
+  // FCM rejects data payloads over 4 KB. A long message goes out without its
+  // ciphertext, and the service worker shows "New message" instead of a preview.
+  const fits = chatId.length + senderName.length + ciphertext.length + nonce.length < 3500;
+  const data: Record<string, string> = fits
+    ? { chatId, senderName, ciphertext, nonce }
+    : { chatId, senderName };
+
   const response = await adminMessaging().sendEachForMulticast({
     tokens: targets.map((target) => target.token),
-    data: { chatId, senderName, ciphertext, nonce },
+    data,
     webpush: { headers: { Urgency: 'high', TTL: '600' } },
   });
 

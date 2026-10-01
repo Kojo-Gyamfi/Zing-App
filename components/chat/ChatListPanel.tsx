@@ -8,6 +8,7 @@ import { useSession } from '@/lib/store/session';
 import { listTime } from '@/lib/format';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
+import { NotificationPrompt } from '@/components/NotificationPrompt';
 
 export function ChatListPanel() {
   const { rows, loading } = useChatList();
@@ -54,6 +55,8 @@ export function ChatListPanel() {
             placeholder:text-faint focus:outline-none focus:ring-1 focus:ring-zing"
         />
       </div>
+
+      <NotificationPrompt />
 
       <div className="min-h-0 flex-1 overflow-y-auto scroll-thin">
         {loading ? (

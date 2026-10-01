@@ -8,6 +8,7 @@ import { loadIdentity, clearIdentity } from '@/lib/crypto/vault';
 import { publicKeyFrom } from '@/lib/crypto/identity';
 import { toB64 } from '@/lib/crypto/codec';
 import { trackPresence } from '@/lib/db/presence';
+import { disablePush } from '@/lib/push';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -143,6 +144,15 @@ export const useSession = create<SessionState>((set, get) => ({
    * never wrote their passphrase down loses their history, so the UI warns.
    */
   signOut: async () => {
+    // Unregister this device from push while still signed in (the rules need
+    // the auth). Capped: offline, the Firestore write would wait forever.
+    const { user } = get();
+    if (user) {
+      await Promise.race([
+        disablePush(user.uid).catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
+    }
     await clearIdentity();
     await firebaseSignOut(auth());
     set({ status: 'signedOut', user: null, profile: null, identity: null });

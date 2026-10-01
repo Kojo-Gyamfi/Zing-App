@@ -14,6 +14,7 @@ import { TypingDots } from '@/components/chat/TypingDots';
 import { tickState } from '@/components/chat/Ticks';
 import { ChatInfoSheet } from '@/components/chat/ChatInfoSheet';
 import type { DecryptedMessage } from '@/lib/db/schema';
+import { clearChatNotifications } from '@/lib/push';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
@@ -61,6 +62,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     if (!atBottom.current) return;
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
   }, [messages.length, peerTyping]);
+
+  // Opening a chat dismisses its notifications, as WhatsApp does.
+  useEffect(() => {
+    void clearChatNotifications(chatId);
+  }, [chatId]);
 
   // The keyboard or emoji panel opening shrinks the list from below without
   // moving its scroll position, which would slide the newest messages out of

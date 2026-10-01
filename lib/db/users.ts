@@ -6,6 +6,7 @@ import {
   runTransaction,
   serverTimestamp,
   arrayUnion,
+  arrayRemove,
   deleteField,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
@@ -227,6 +228,10 @@ export async function migrateLegacyContact(uid: string): Promise<boolean> {
 
 export async function registerPushToken(uid: string, token: string): Promise<void> {
   await setDoc(accountRef(uid), { pushTokens: arrayUnion(token) }, { merge: true });
+}
+
+export async function unregisterPushToken(uid: string, token: string): Promise<void> {
+  await updateDoc(accountRef(uid), { pushTokens: arrayRemove(token) });
 }
 
 /** Re-wrapping after a passphrase change. The key itself never changes. */

@@ -1,10 +1,65 @@
 'use client';
 
-import { getMessaging, getToken, isSupported } from 'firebase/messaging';
+import { deleteToken, getMessaging, getToken, isSupported } from 'firebase/messaging';
 import { getApp } from 'firebase/app';
-import { registerPushToken } from '@/lib/db/users';
+import { registerPushToken, unregisterPushToken } from '@/lib/db/users';
 
 export type PushOutcome = 'granted' | 'denied' | 'unsupported';
+
+/**
+ * What this device can do about notifications right now:
+ *   unsupported -- no Web Push here (or iOS outside a home-screen app)
+ *   default     -- never asked; the app may offer to turn them on
+ *   granted     -- on
+ *   denied      -- blocked in the browser; only the user can undo that
+ */
+export type PushState = 'unsupported' | NotificationPermission;
+
+export async function pushState(): Promise<PushState> {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  if (!('serviceWorker' in navigator)) return 'unsupported';
+  // Apple only allows Web Push for apps added to the home screen.
+  if (isIOS() && !isStandalone()) return 'unsupported';
+  if (!(await isSupported().catch(() => false))) return 'unsupported';
+  return Notification.permission;
+}
+
+/**
+ * Re-register on launch when permission was already given. Never prompts:
+ * asking out of nowhere gets a reflexive "Block", and Chrome then hides the
+ * prompt for good. Asking happens only from a button (enablePush).
+ */
+export async function refreshPush(uid: string): Promise<void> {
+  if ((await pushState()) === 'granted') await enablePush(uid);
+}
+
+/**
+ * Stop this device receiving the account's notifications. Called on sign-out,
+ * or the next person to use this browser would get the previous account's
+ * messages buzzing their phone.
+ */
+export async function disablePush(uid: string): Promise<void> {
+  const registered = readRegistered();
+  clearRegistered();
+
+  const token = registered?.startsWith(`${uid}:`) ? registered.slice(uid.length + 1) : null;
+  await Promise.allSettled([
+    token ? unregisterPushToken(uid, token) : Promise.resolve(),
+    isSupported().then((ok) => (ok ? deleteToken(getMessaging(getApp())) : false)),
+  ]);
+}
+
+/** Opening a chat clears its notifications, like WhatsApp. */
+export async function clearChatNotifications(chatId: string): Promise<void> {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const open = (await registration?.getNotifications({ tag: chatId })) ?? [];
+    open.forEach((notification) => notification.close());
+  } catch {
+    // Nothing to clear.
+  }
+}
 
 /** Registers the worker that both caches the shell and decrypts notifications. */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
@@ -68,6 +123,14 @@ function writeRegistered(value: string) {
     localStorage.setItem(REGISTERED, value);
   } catch {
     // Storage blocked: we just re-register next launch.
+  }
+}
+
+function clearRegistered() {
+  try {
+    localStorage.removeItem(REGISTERED);
+  } catch {
+    // Nothing stored.
   }
 }
 
