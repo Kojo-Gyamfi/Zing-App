@@ -14,7 +14,8 @@ import {
 import { formatPhone, limitPhoneInput } from '@/lib/phone';
 import { enablePush, isIOS, pushState, type PushState } from '@/lib/push';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
-import { deleteAccount } from '@/lib/db/account';
+import { deleteAccount, NEEDS_FRESH_LINK } from '@/lib/db/account';
+import { sendLink } from '@/lib/auth/emailLink';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -41,6 +42,20 @@ export default function SettingsPage() {
       await signOut();
     } catch (cause) {
       const code = (cause as { code?: string }).code ?? '';
+      if (code === NEEDS_FRESH_LINK && user.email) {
+        // Nothing has been deleted yet. The link brings them back here.
+        const sent = await sendLink(user.email, 'signin', '/settings').then(
+          () => true,
+          () => false,
+        );
+        setDeleteError(
+          sent
+            ? `To confirm it's you, open the link we just emailed to ${user.email}, then delete again.`
+            : 'Could not send a confirmation email. Check your connection and try again.',
+        );
+        setDeleting(false);
+        return;
+      }
       setDeleteError(
         code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request'
           ? 'Confirm with Google to delete your account.'

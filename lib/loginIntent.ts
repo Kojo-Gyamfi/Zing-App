@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * Which login button was pressed, carried across Google's redirect.
+ * Which login button was pressed, carried across Google's redirect (an email
+ * link carries it in its own URL instead -- see lib/auth/linkParams.ts).
  *
- * Both buttons are the same Google sign-in. The difference only matters when
- * someone taps "I already have an account" but picks a Google account with no
- * Zing profile: onboarding then says so, instead of silently starting sign-up.
+ * Both buttons lead to the same sign-in choices. The difference only matters
+ * when someone taps "I already have an account" but signs in with an account
+ * that has no Zing profile: onboarding then says so, instead of silently
+ * starting sign-up.
  */
 export type LoginIntent = 'signup' | 'signin';
 

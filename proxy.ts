@@ -64,8 +64,10 @@ export const config = {
   matcher: [
     {
       // Pages only: API routes return JSON, and static files (anything with a
-      // dot, including sw.js and the manifest) carry no inline script.
-      source: '/((?!api|_next/static|_next/image|.*\\..*).*)',
+      // dot, including sw.js and the manifest) carry no inline script. Not
+      // /__/auth either: that is Firebase's own page, rewritten in from
+      // firebaseapp.com (next.config.ts), and our CSP would break it.
+      source: '/((?!api|__/auth|_next/static|_next/image|.*\\..*).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

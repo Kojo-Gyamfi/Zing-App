@@ -22,13 +22,13 @@ async function newPhone(browser: Browser): Promise<Page> {
 }
 
 /**
- * Sign up through the Auth emulator's stand-in for Google, then onboard.
- * Returns the recovery key shown at the end.
+ * Sign in through the Auth emulator's stand-in for Google.
  */
-async function signUp(page: Page, handle: string): Promise<string> {
+async function signInWithGoogle(page: Page, handle: string) {
   await page.goto('/login');
-  const popupOpened = page.waitForEvent('popup');
   await page.getByRole('button', { name: 'Create an account' }).click();
+  const popupOpened = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Continue with Google' }).click();
 
   // The emulator's account picker. Its handlers attach on load, so a click
   // before then does nothing: retry until the new-account form shows.
@@ -41,7 +41,40 @@ async function signUp(page: Page, handle: string): Promise<string> {
   await popup.locator('#email-input').fill(`${handle}@example.com`);
   await popup.locator('#display-name-input').fill(handle);
   await popup.locator('#sign-in').click();
+}
 
+/**
+ * Ask for an email sign-in link and return it. The Auth emulator sends no
+ * mail; it lists the links it would have sent.
+ */
+async function requestEmailLink(page: Page, email: string): Promise<string> {
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Create an account' }).click();
+  await page.getByLabel('Email').fill(email);
+  await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
+  await expect(page.getByText('Check your email')).toBeVisible();
+
+  const response = await page.request.get(
+    'http://127.0.0.1:9099/emulator/v1/projects/demo-zing/oobCodes',
+  );
+  const { oobCodes } = (await response.json()) as {
+    oobCodes: { email: string; requestType: string; oobLink: string }[];
+  };
+  const oobLink = oobCodes
+    .filter((code) => code.email === email && code.requestType === 'EMAIL_SIGNIN')
+    .at(-1)?.oobLink;
+  expect(oobLink).toBeTruthy();
+
+  // What a real email's link resolves to: our finish page, with Firebase's
+  // one-time code appended.
+  const emulated = new URL(oobLink!).searchParams;
+  const link = new URL(emulated.get('continueUrl')!);
+  for (const key of ['mode', 'oobCode', 'apiKey']) link.searchParams.set(key, emulated.get(key)!);
+  return link.toString();
+}
+
+/** Onboard a freshly signed-in account. Returns the recovery key shown at the end. */
+async function onboard(page: Page, handle: string): Promise<string> {
   await expect(page).toHaveURL(/\/onboarding/);
   await page.getByLabel('Username').fill(handle);
   await page.getByRole('button', { name: 'Continue' }).click();
@@ -98,8 +131,10 @@ test('two people chat end to end, and history survives a new device', async ({ b
   const aliceHandle = `alice_${run}`;
   const bobHandle = `bob_${run}`;
 
-  const aliceRecoveryKey = await signUp(alice, aliceHandle);
-  await signUp(bob, bobHandle);
+  await signInWithGoogle(alice, aliceHandle);
+  const aliceRecoveryKey = await onboard(alice, aliceHandle);
+  await signInWithGoogle(bob, bobHandle);
+  await onboard(bob, bobHandle);
 
   // Alice finds Bob by @username and opens a chat.
   await alice.getByRole('link', { name: 'New chat' }).click();
@@ -178,4 +213,37 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await expect(alice.getByRole('main').getByText('Deleted account')).toBeVisible();
   await expect(alice.getByPlaceholder('This account was deleted')).toBeDisabled();
   await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
+});
+
+test('signs up with an email link, on any provider, and can delete the account', async ({
+  browser,
+}) => {
+  const carol = await newPhone(browser);
+  const handle = `carol_${run}`;
+  const email = `${handle}@icloud.com`;
+
+  // A link opened in another browser (or a home-screen app) has no stored
+  // address: the finish page asks for it.
+  const firstLink = await requestEmailLink(carol, email);
+  const elsewhere = await newPhone(browser);
+  await elsewhere.goto(firstLink);
+  await expect(elsewhere.getByRole('heading', { name: 'Confirm your email' })).toBeVisible();
+  await elsewhere.getByLabel('Email').fill(email);
+  await elsewhere.getByRole('button', { name: 'Continue' }).click();
+  await expect(elsewhere).toHaveURL(/\/onboarding/);
+  await elsewhere.context().close();
+
+  // The usual case: the same browser, through the pasted-link box. That
+  // signs in the same account the other browser just created.
+  const link = await requestEmailLink(carol, email);
+  await carol.getByLabel('Sign-in link').fill(link);
+  await carol.getByRole('button', { name: 'Sign in with link' }).click();
+  await onboard(carol, handle);
+
+  // Freshly signed in, so deletion needs no second link.
+  await carol.goto('/settings');
+  await carol.getByRole('button', { name: 'Delete my account' }).click();
+  await carol.getByLabel(`Type ${handle} to confirm`).fill(handle);
+  await carol.getByRole('button', { name: 'Delete forever' }).click();
+  await expect(carol).toHaveURL(/\/login/, { timeout: 30_000 });
 });

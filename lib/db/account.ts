@@ -19,6 +19,33 @@ import type { ContactDoc } from './schema';
 const BATCH_LIMIT = 500;
 
 /**
+ * Firebase wants a sign-in within the last five minutes before it deletes an
+ * account. A minute of margin covers the time the deletion itself takes.
+ */
+const RECENT_SIGN_IN_MS = 4 * 60 * 1000;
+
+/** Thrown when an email-link account must open a fresh link first. */
+export const NEEDS_FRESH_LINK = 'zing/needs-fresh-link';
+
+/**
+ * Google accounts confirm in a popup. Email-link accounts have no popup to
+ * offer: if their sign-in is not recent, the caller emails them a new link
+ * and they come back to try again.
+ */
+async function confirmIdentity(user: User): Promise<void> {
+  if (user.providerData.some((entry) => entry.providerId === 'google.com')) {
+    await reauthenticateWithPopup(user, googleProvider);
+    return;
+  }
+  const { authTime } = await user.getIdTokenResult();
+  if (Date.now() - new Date(authTime).getTime() > RECENT_SIGN_IN_MS) {
+    throw Object.assign(new Error('Sign in again to delete the account.'), {
+      code: NEEDS_FRESH_LINK,
+    });
+  }
+}
+
+/**
  * "Delete my account", done from the client through the security rules (a
  * Cloud Function would be tidier but needs the paid plan).
  *
@@ -37,7 +64,7 @@ const BATCH_LIMIT = 500;
  * anything fails midway, trying again finishes the job.
  */
 export async function deleteAccount(user: User, username: string): Promise<void> {
-  await reauthenticateWithPopup(user, googleProvider);
+  await confirmIdentity(user);
   const uid = user.uid;
 
   // Unregister this browser from push while the account doc still exists.

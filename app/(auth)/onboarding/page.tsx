@@ -176,9 +176,9 @@ export default function OnboardingPage() {
             <div className="rounded-2xl border border-line bg-surface p-4">
               <p className="text-[14px] font-medium text-ink">No Zing account found</p>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                {user.email ?? 'This Google account'} isn&apos;t linked to a Zing account yet. If
-                you signed up with a different Google account, switch to it. Otherwise, set one
-                up below.
+                {user.email ?? 'This account'} isn&apos;t linked to a Zing account yet. If you
+                signed up with a different Google account or email, switch to it. Otherwise, set
+                one up below.
               </p>
               <button
                 onClick={() => {
@@ -187,7 +187,7 @@ export default function OnboardingPage() {
                 }}
                 className="mt-3 text-[13px] font-medium text-zing"
               >
-                Use a different Google account
+                Use a different account
               </button>
             </div>
           )}
