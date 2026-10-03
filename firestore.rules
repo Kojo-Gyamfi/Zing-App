@@ -311,5 +311,9 @@ service cloud.firestore {
     match /{path=**}/hidden/{uid} {
       allow list: if signedIn() && resource.data.uid == request.auth.uid;
     }
+
+    // Deliberately no rules for pushLimits, emailCodes or emailCodeLimits:
+    // only the server's Admin SDK (which bypasses rules) may touch them, and
+    // with no match here every client request is refused.
   }
 }

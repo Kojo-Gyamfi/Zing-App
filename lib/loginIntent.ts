@@ -1,8 +1,7 @@
 'use client';
 
 /**
- * Which login button was pressed, carried across Google's redirect (an email
- * link carries it in its own URL instead -- see lib/auth/linkParams.ts).
+ * Which login button was pressed, carried across Google's redirect.
  *
  * Both buttons lead to the same sign-in choices. The difference only matters
  * when someone taps "I already have an account" but signs in with an account

@@ -24,13 +24,13 @@ const BATCH_LIMIT = 500;
  */
 const RECENT_SIGN_IN_MS = 4 * 60 * 1000;
 
-/** Thrown when an email-link account must open a fresh link first. */
-export const NEEDS_FRESH_LINK = 'zing/needs-fresh-link';
+/** Thrown when an email account must confirm a fresh code first. */
+export const NEEDS_FRESH_SIGNIN = 'zing/needs-fresh-signin';
 
 /**
- * Google accounts confirm in a popup. Email-link accounts have no popup to
- * offer: if their sign-in is not recent, the caller emails them a new link
- * and they come back to try again.
+ * Google accounts confirm in a popup. Email accounts have no popup to offer:
+ * if their sign-in is not recent, the caller emails them a fresh code, and
+ * signing in with it resets the clock.
  */
 async function confirmIdentity(user: User): Promise<void> {
   if (user.providerData.some((entry) => entry.providerId === 'google.com')) {
@@ -40,7 +40,7 @@ async function confirmIdentity(user: User): Promise<void> {
   const { authTime } = await user.getIdTokenResult();
   if (Date.now() - new Date(authTime).getTime() > RECENT_SIGN_IN_MS) {
     throw Object.assign(new Error('Sign in again to delete the account.'), {
-      code: NEEDS_FRESH_LINK,
+      code: NEEDS_FRESH_SIGNIN,
     });
   }
 }

@@ -52,6 +52,10 @@ export default defineConfig({
         NEXT_PUBLIC_FIREBASE_VAPID_KEY: '',
         NEXT_PUBLIC_RECAPTCHA_SITE_KEY: '',
         NEXT_PUBLIC_SENTRY_DSN: '',
+        // The email-code routes run the Admin SDK against the emulators.
+        FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099',
+        FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080',
+        EMAIL_CODE_SECRET: 'e2e-only',
       },
     },
   ],
