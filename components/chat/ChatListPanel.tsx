@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useChatList } from '@/lib/hooks/useChatList';
 import { useSession } from '@/lib/store/session';
+import { useTypingChats } from '@/lib/hooks/useTypingChats';
 import { listTime } from '@/lib/format';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
@@ -15,6 +16,11 @@ export function ChatListPanel() {
   const profile = useSession((state) => state.profile);
   const pathname = usePathname();
   const [filter, setFilter] = useState('');
+  const myUid = useSession((state) => state.user?.uid);
+  const typing = useTypingChats(
+    myUid,
+    useMemo(() => rows.filter((row) => !row.peerDeleted).map((row) => row.id), [rows]),
+  );
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -110,7 +116,9 @@ export function ChatListPanel() {
                         <span
                           className={`truncate text-[14px] ${row.unread ? 'text-ink' : 'text-muted'}`}
                         >
-                          {row.preview === null
+                          {typing.has(row.id) ? (
+                            <span className="font-medium text-zing">typing…</span>
+                          ) : row.preview === null
                             ? row.lastSenderId
                               ? 'Encrypted message'
                               : 'Say hello'

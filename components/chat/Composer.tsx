@@ -32,6 +32,8 @@ export function Composer({
   // Where the caret was last. On a phone the box loses focus while the emoji
   // panel is open (that is what hides the keyboard), so this is where taps land.
   const caret = useRef<{ start: number; end: number } | null>(null);
+  // Whether the keyboard was up when Send was pressed; it stays up if so.
+  const keepKeyboard = useRef(false);
 
   // Starting an edit loads that message's text; leaving one clears the box
   // so the old text is not accidentally sent as a new message. Adjusted
@@ -243,7 +245,20 @@ export function Composer({
         </div>
 
         <button
-          onClick={submit}
+          // Tapping Send must not take focus from the box: on a phone that
+          // closes the keyboard after every message. Preventing the default
+          // stops the focus move; refocusing in the click (still inside the
+          // tap, which iOS requires) covers browsers that move it anyway.
+          onPointerDown={(event) => {
+            keepKeyboard.current = document.activeElement === box.current;
+            event.preventDefault();
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            submit();
+            if (keepKeyboard.current) box.current?.focus();
+            keepKeyboard.current = false;
+          }}
           disabled={!text.trim() || disabled}
           aria-label={editing ? 'Save edit' : 'Send'}
           className="mb-0.5 grid size-11 shrink-0 place-items-center rounded-full bg-zing

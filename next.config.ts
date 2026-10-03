@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
   // emulators; a separate build dir lets it run beside `npm run dev`.
   distDir: process.env.NEXT_DIST_DIR || '.next',
 
+  // The sign-in code email attaches the app icon from public/, which is
+  // otherwise served from the CDN and not bundled with server functions.
+  outputFileTracingIncludes: {
+    '/api/auth/email-code/send': ['./public/icon-192.png'],
+  },
+
   // ngrok tunnel for testing on a real phone -- dev server only, ignored in production.
   allowedDevOrigins: ['untreacherous-leontine-nonpejoratively.ngrok-free.dev'],
 

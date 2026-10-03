@@ -1,4 +1,6 @@
+import path from 'node:path';
 import nodemailer, { type Transporter } from 'nodemailer';
+import { LOGO_CID, signInCodeHtml, signInCodeText } from './signInCode';
 
 /**
  * Sign-in codes go out from Zing's own Gmail account over Gmail's SMTP.
@@ -31,15 +33,14 @@ export async function sendSignInCode(to: string, code: string): Promise<void> {
     to,
     // In the subject too, so it shows in the notification without opening.
     subject: `${code} is your Zing code`,
-    text: [
-      `Your Zing code is ${code}.`,
-      '',
-      'It expires in 10 minutes. If you did not ask for it, you can ignore this email.',
-    ].join('\n'),
-    html: `<div style="font-family:system-ui,sans-serif;font-size:15px;color:#111">
-  <p>Your Zing code is</p>
-  <p style="font-size:32px;font-weight:700;letter-spacing:6px;margin:12px 0">${code}</p>
-  <p style="color:#555">It expires in 10 minutes. If you did not ask for it, you can ignore this email.</p>
-</div>`,
+    text: signInCodeText(code),
+    html: signInCodeHtml(code),
+    attachments: [
+      {
+        filename: 'zing.png',
+        path: path.join(process.cwd(), 'public', 'icon-192.png'),
+        cid: LOGO_CID,
+      },
+    ],
   });
 }

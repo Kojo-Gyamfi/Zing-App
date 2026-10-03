@@ -9,6 +9,7 @@ import { matchesPublicKey, publicKeyFrom } from '@/lib/crypto/identity';
 import { saveIdentity } from '@/lib/crypto/vault';
 import { getRecoveryBackup, getUser, updateKeyBackup } from '@/lib/db/users';
 import { Button } from '@/components/ui/Button';
+import { AuthFrame } from '@/components/AuthFrame';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
 import { returnPath } from '@/lib/returnTo';
@@ -145,7 +146,7 @@ export default function UnlockPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-6 pt-safe pb-safe">
+    <AuthFrame>
       <header className="pt-10 pb-8">
         <h1 className="text-2xl font-bold tracking-tight">
           {mode === 'passphrase'
@@ -280,6 +281,6 @@ export default function UnlockPage() {
           </Button>
         </div>
       )}
-    </main>
+    </AuthFrame>
   );
 }
