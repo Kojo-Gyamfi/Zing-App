@@ -49,7 +49,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable} h-full`}>
-      <body className="min-h-full antialiased font-sans">
+      {/* Browser extensions (Grammarly and the like) add attributes to <body>
+          before React loads. This ignores attribute differences on this one
+          element only -- mismatches anywhere below still surface. */}
+      <body className="min-h-full antialiased font-sans" suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

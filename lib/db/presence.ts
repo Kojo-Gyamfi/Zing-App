@@ -55,22 +55,59 @@ export const TYPING_TTL = 4000;
 export function setTyping(chatId: string, uid: string, typing: boolean): void {
   const node = ref(rtdb(), `typing/${chatId}/${uid}`);
   if (typing) {
-    void set(node, Date.now());
+    // The server's clock, not this phone's: two phones' clocks can easily be
+    // seconds apart, which would hide the indicator or keep it on.
+    void set(node, serverTimestamp());
     void onDisconnect(node).remove();
   } else {
     void remove(node);
   }
 }
 
+/** How far this device's clock is behind the server's, kept current by RTDB. */
+let serverOffset = 0;
+let watchingOffset = false;
+
+function serverNow(): number {
+  if (!watchingOffset) {
+    watchingOffset = true;
+    onValue(ref(rtdb(), '.info/serverTimeOffset'), (snapshot) => {
+      serverOffset = (snapshot.val() as number | null) ?? 0;
+    });
+  }
+  return Date.now() + serverOffset;
+}
+
+/**
+ * Typing on, then off again TYPING_TTL after the last ping. The node only
+ * changes while the peer keeps typing, so the "off" has to come from a timer
+ * here -- someone who pauses mid-sentence leaves their last ping in place.
+ */
 export function subscribeTyping(
   chatId: string,
   peerUid: string,
   onChange: (typing: boolean) => void,
 ) {
-  return onValue(ref(rtdb(), `typing/${chatId}/${peerUid}`), (snapshot) => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const stop = onValue(ref(rtdb(), `typing/${chatId}/${peerUid}`), (snapshot) => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+
     const at = snapshot.val() as number | null;
-    onChange(at !== null && Date.now() - at < TYPING_TTL);
+    const age = at === null ? Infinity : serverNow() - at;
+    if (age >= TYPING_TTL) {
+      onChange(false);
+      return;
+    }
+    onChange(true);
+    timer = setTimeout(() => onChange(false), TYPING_TTL - Math.max(0, age));
   });
+
+  return () => {
+    if (timer) clearTimeout(timer);
+    stop();
+  };
 }
 
 /**

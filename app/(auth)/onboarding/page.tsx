@@ -18,6 +18,7 @@ import {
   getUser,
 } from '@/lib/db/users';
 import { Button } from '@/components/ui/Button';
+import { AuthFrame } from '@/components/AuthFrame';
 import { Field } from '@/components/ui/Field';
 import { Splash } from '@/components/Splash';
 import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
@@ -152,7 +153,7 @@ export default function OnboardingPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-6 pt-safe pb-safe">
+    <AuthFrame>
       <header className="pt-10 pb-8">
         <h1 className="text-2xl font-bold tracking-tight">
           {step === 'handle'
@@ -310,6 +311,6 @@ export default function OnboardingPage() {
           </Button>
         </div>
       )}
-    </main>
+    </AuthFrame>
   );
 }

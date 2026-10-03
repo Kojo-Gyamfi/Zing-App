@@ -10,7 +10,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { MessageBubble, type Quote } from '@/components/chat/MessageBubble';
 import { MessageMenu } from '@/components/chat/MessageMenu';
 import { Composer, type ComposerContext } from '@/components/chat/Composer';
-import { TypingDots } from '@/components/chat/TypingDots';
+import { TypingBubble, TypingDots } from '@/components/chat/TypingDots';
 import { tickState } from '@/components/chat/Ticks';
 import { ChatInfoSheet } from '@/components/chat/ChatInfoSheet';
 import type { DecryptedMessage } from '@/lib/db/schema';
@@ -172,7 +172,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
               {peerTyping ? (
                 <>
                   <TypingDots />
-                  <span className="text-zing">typing</span>
+                  <span className="text-zing">typing…</span>
                 </>
               ) : (
                 lastSeenLabel(presence)
@@ -265,6 +265,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             </section>
           ))
         )}
+
+        {peerTyping && !loading && <TypingBubble />}
       </div>
 
       {notice && (

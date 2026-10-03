@@ -150,6 +150,18 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await send(bob, 'hi alice');
   await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
 
+  // Typing shows on the other side as a bubble in the thread, and goes away
+  // by itself once the typing stops.
+  await alice.getByPlaceholder('Message').fill('still typ');
+  await expect(bob.getByRole('status', { name: 'typing' })).toBeVisible();
+  await expect(bob.getByRole('status', { name: 'typing' })).toBeHidden({ timeout: 10_000 });
+
+  // Sending keeps the keyboard up: the box still has focus after the tap.
+  await alice.getByPlaceholder('Message').fill('keyboard stays');
+  await alice.getByRole('button', { name: 'Send' }).click();
+  await expect(alice.getByPlaceholder('Message')).toBeFocused();
+  await expect(bob.getByRole('main').getByText('keyboard stays')).toBeVisible();
+
   // Edit.
   await send(alice, 'see you at 5');
   await expect(bob.getByRole('main').getByText('see you at 5')).toBeVisible();

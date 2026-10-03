@@ -48,6 +48,8 @@ export function useThread(chatId: string, peerUid: string | null) {
   const [failed, setFailed] = useState<(DecryptedMessage & { chatId: string })[]>([]);
 
   const lastTypingPing = useRef(0);
+  const loadingOlder = useRef(false);
+  const liveWindow = useRef<DecryptedMessage[]>([]);
 
   // "Delete for me". Tagged with the chat it belongs to so a stale set from the
   // previous chat never filters this one.
@@ -140,6 +142,23 @@ export function useThread(chatId: string, peerUid: string | null) {
       chatId,
       conversationKey,
       (next) => {
+        // The live window is the newest PAGE_SIZE; each new message pushes
+        // the oldest one out. Once older pages are loaded, that message
+        // would fall into the gap between the two, so hand it over.
+        const edge = next[0]?.createdAt?.getTime();
+        const dropped =
+          edge === undefined
+            ? []
+            : liveWindow.current.filter(
+                (message) =>
+                  message.createdAt &&
+                  message.createdAt.getTime() <= edge &&
+                  !next.some((entry) => entry.id === message.id),
+              );
+        liveWindow.current = next;
+        if (dropped.length) {
+          setOlder((current) => (current.length ? [...current, ...dropped] : current));
+        }
         setMessages(next);
         setLoading(false);
       },
@@ -313,14 +332,21 @@ export function useThread(chatId: string, peerUid: string | null) {
   }, [chatId, user]);
 
   const loadOlder = useCallback(async () => {
-    if (!conversationKey || exhausted) return;
+    // Every scroll event near the top calls this; without the guard each one
+    // fetched the same page again and it was added several times over.
+    if (!conversationKey || exhausted || loadingOlder.current) return;
 
     const oldest = (older[0] ?? messages[0])?.createdAt;
     if (!oldest) return;
 
-    const page = await loadOlderMessages(chatId, conversationKey, oldest);
-    if (page.length < PAGE_SIZE) setExhausted(true);
-    setOlder((current) => [...page, ...current]);
+    loadingOlder.current = true;
+    try {
+      const page = await loadOlderMessages(chatId, conversationKey, oldest);
+      if (page.length < PAGE_SIZE) setExhausted(true);
+      setOlder((current) => [...page, ...current]);
+    } finally {
+      loadingOlder.current = false;
+    }
   }, [chatId, conversationKey, older, messages, exhausted]);
 
   // Clear typing if the tab goes away mid-sentence.
@@ -331,7 +357,17 @@ export function useThread(chatId: string, peerUid: string | null) {
   }, [chatId, user]);
 
   const hiddenIds = hidden.chatId === chatId ? hidden.ids : null;
-  const thread = [...older, ...messages].filter((message) => !hiddenIds?.has(message.id));
+  // An older page can overlap the live window at its edge (several messages
+  // sharing a timestamp, or the window sliding as new ones arrive), so each
+  // message appears once: the live copy wins, being the freshest.
+  const liveIds = new Set(messages.map((message) => message.id));
+  const seen = new Set<string>();
+  const olderOnce = older.filter((message) => {
+    if (liveIds.has(message.id) || seen.has(message.id)) return false;
+    seen.add(message.id);
+    return true;
+  });
+  const thread = [...olderOnce, ...messages].filter((message) => !hiddenIds?.has(message.id));
   const failedHere = failed.filter(
     (entry) => entry.chatId === chatId && !thread.some((message) => message.id === entry.id),
   );
