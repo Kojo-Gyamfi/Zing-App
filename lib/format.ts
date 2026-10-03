@@ -1,3 +1,13 @@
+/**
+ * 12-hour clock, "3:05 PM". en-US is pinned so the format is the same on every
+ * phone, whatever its regional settings would pick.
+ */
+const CLOCK = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+
+export function clockTime(date: Date): string {
+  return CLOCK.format(date);
+}
+
 /** Chat-list timestamp: time today, "Yesterday", weekday this week, else a date. */
 export function listTime(date: Date | null): string {
   if (!date) return '';
@@ -5,7 +15,7 @@ export function listTime(date: Date | null): string {
   const now = new Date();
   const sameDay = date.toDateString() === now.toDateString();
   if (sameDay) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    return clockTime(date);
   }
 
   const yesterday = new Date(now);
@@ -21,7 +31,7 @@ export function listTime(date: Date | null): string {
 /** Bubble timestamp. */
 export function bubbleTime(date: Date | null): string {
   if (!date) return '';
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return clockTime(date);
 }
 
 /** Day divider inside a thread. */

@@ -162,6 +162,12 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await expect(alice.getByPlaceholder('Message')).toBeFocused();
   await expect(bob.getByRole('main').getByText('keyboard stays')).toBeVisible();
 
+  // Past one page of messages, the newest still scrolls into view by itself
+  // (it used to stop once the live window was full and the count stopped
+  // changing).
+  for (let index = 1; index <= 32; index++) await send(alice, `burst ${index}`);
+  await expect(bob.getByRole('main').getByText('burst 32', { exact: true })).toBeInViewport();
+
   // Edit.
   await send(alice, 'see you at 5');
   await expect(bob.getByRole('main').getByText('see you at 5')).toBeVisible();
@@ -187,7 +193,7 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await alice.getByRole('button', { name: 'Unlock' }).click();
   // Unlocking returns to the chat that was open, history decrypted.
   await expect(alice).toHaveURL(/\/chats\/.+_.+/, { timeout: 60_000 });
-  await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
+  await expect(alice.getByRole('main').getByText('burst 32', { exact: true })).toBeVisible();
 
   // Another new device, passphrase forgotten: the recovery key, then a new passphrase.
   await wipeDevice(alice);
@@ -199,7 +205,7 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await alice.getByRole('textbox', { name: 'Type it again' }).fill('a brand new passphrase');
   await alice.getByRole('button', { name: 'Save and unlock' }).click();
   await expect(alice).toHaveURL(/\/chats\/.+_.+/, { timeout: 60_000 });
-  await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
+  await expect(alice.getByRole('main').getByText('burst 32', { exact: true })).toBeVisible();
   await expect(alice.getByRole('main').getByText(bobHandle)).toBeVisible();
 
   // Bob deletes his account: Google re-confirms who he is, then it is gone.
@@ -219,7 +225,7 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await alice.reload();
   await expect(alice.getByRole('main').getByText('Deleted account')).toBeVisible();
   await expect(alice.getByPlaceholder('This account was deleted')).toBeDisabled();
-  await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
+  await expect(alice.getByRole('main').getByText('burst 32', { exact: true })).toBeVisible();
 });
 
 test('signs up with an emailed code, on any provider, and can delete the account', async ({

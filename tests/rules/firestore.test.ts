@@ -258,6 +258,20 @@ describe('chats', () => {
   it('never changes the member list', async () => {
     await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { members: ['alice', 'carol'] }));
   });
+
+  it('dates a chat only "now", and previews only your own message', async () => {
+    const chat = doc(as('alice'), 'chats', CHAT);
+    const mine = { id: 'm', senderId: 'alice', ciphertext: 'c', nonce: 'n' };
+    // What sending does.
+    await assertSucceeds(updateDoc(chat, { lastMessage: mine, updatedAt: serverTimestamp() }));
+    // Pinned to the top and unread forever.
+    await assertFails(updateDoc(chat, { updatedAt: new Date('2100-01-01') }));
+    // A preview claiming to be from the other person.
+    await assertFails(updateDoc(chat, { lastMessage: { ...mine, senderId: 'bob' } }));
+    // Rewriting history, or adding fields of its own.
+    await assertFails(updateDoc(chat, { createdAt: new Date('2000-01-01') }));
+    await assertFails(updateDoc(chat, { pinned: true }));
+  });
 });
 
 describe('messages', () => {

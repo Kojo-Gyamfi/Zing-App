@@ -10,8 +10,9 @@ import { subscribeTyping } from '@/lib/db/presence';
  */
 export function useTypingChats(myUid: string | undefined, chatIds: string[]): Set<string> {
   const [typing, setTyping] = useState<Set<string>>(() => new Set());
-  // A string key, so a new array with the same chats does not resubscribe.
-  const key = chatIds.join(',');
+  // A string key, sorted, so neither a new array nor chats reordering (every
+  // new message moves one to the top) tears the listeners down.
+  const key = [...chatIds].sort().join(',');
 
   useEffect(() => {
     if (!myUid || !key) return;

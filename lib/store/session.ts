@@ -9,6 +9,7 @@ import { publicKeyFrom } from '@/lib/crypto/identity';
 import { toB64 } from '@/lib/crypto/codec';
 import { trackPresence } from '@/lib/db/presence';
 import { disablePush } from '@/lib/push';
+import { useKeys } from '@/lib/store/keys';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -96,7 +97,9 @@ export const useSession = create<SessionState>((set, get) => ({
         return;
       }
 
-      const identity = await loadIdentity();
+      // Storage that cannot be opened is treated as "no key on this device"
+      // (the unlock screen), not left to hang the app on its splash.
+      const identity = await loadIdentity().catch(() => null);
 
       // A local key that does not match the registered public key is stale --
       // treat it as no key at all rather than silently failing to decrypt
@@ -123,6 +126,9 @@ export const useSession = create<SessionState>((set, get) => ({
       retry = null;
 
       if (!user) {
+        // Unsealed conversation keys live in memory for the session; signing
+        // out must not leave them behind in a tab that stays open.
+        useKeys.getState().clear();
         set({ status: 'signedOut', user: null, profile: null, identity: null });
         return;
       }
@@ -168,6 +174,7 @@ export const useSession = create<SessionState>((set, get) => ({
     endPresence();
     await clearIdentity();
     await firebaseSignOut(auth());
+    useKeys.getState().clear();
     set({ status: 'signedOut', user: null, profile: null, identity: null });
   },
 }));

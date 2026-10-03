@@ -35,6 +35,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid-code' }, { status: 400 });
   }
 
+  // Looked up before the code is spent: a passing hiccup here must not cost
+  // the person their code. Only "no such user" means "create one".
+  let existingUid: string | null;
+  try {
+    existingUid = (await adminAuth().getUserByEmail(email)).uid;
+  } catch (cause) {
+    if ((cause as { code?: string }).code !== 'auth/user-not-found') {
+      return NextResponse.json({ error: 'unavailable' }, { status: 503 });
+    }
+    existingUid = null;
+  }
+
   const ref = adminDb().doc(`emailCodes/${keyFor(email)}`);
   const secret = codeSecret();
   const outcome = await adminDb().runTransaction<Outcome>(async (transaction) => {
@@ -56,11 +68,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: outcome }, { status: outcome === 'invalid-code' ? 401 : 410 });
   }
 
-  let uid: string;
-  try {
-    uid = (await adminAuth().getUserByEmail(email)).uid;
-  } catch {
-    uid = (await adminAuth().createUser({ email, emailVerified: true })).uid;
+  let uid = existingUid;
+  if (!uid) {
+    try {
+      uid = (await adminAuth().createUser({ email, emailVerified: true })).uid;
+    } catch (cause) {
+      // Created in the moment since the lookup (a second tab, a Google
+      // sign-in): that is the account to use.
+      if ((cause as { code?: string }).code !== 'auth/email-already-exists') throw cause;
+      uid = (await adminAuth().getUserByEmail(email)).uid;
+    }
   }
   return NextResponse.json({ token: await adminAuth().createCustomToken(uid) });
 }

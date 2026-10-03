@@ -67,3 +67,12 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line) transparent;
 }
+
+/* WhatsApp-style doodle wallpaper behind a conversation. It stays put while
+   the messages scroll over it, as WhatsApp's does. */
+@utility chat-wallpaper {
+  background-color: var(--color-void);
+  background-image: url('/chat-doodles.svg');
+  background-size: 320px 320px;
+  background-repeat: repeat;
+}

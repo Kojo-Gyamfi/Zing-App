@@ -1,7 +1,6 @@
 import {
   doc,
   getDoc,
-  setDoc,
   updateDoc,
   collection,
   query,
@@ -11,6 +10,7 @@ import {
   onSnapshot,
   runTransaction,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
 import { createConversationKey, sealConversationKey, openConversationKey } from '@/lib/crypto/chat';
@@ -31,11 +31,12 @@ export function directChatId(a: string, b: string): string {
 /**
  * Create the chat and seal its conversation key to both members.
  *
- * Deliberately three writes rather than one batch: security rules on the
+ * Deliberately two commits rather than one batch: security rules on the
  * keys/ subcollection call get() on the parent chat, and inside a batch that
  * get() sees pre-commit state -- the chat would not exist yet and the rule
  * would reject. The chat doc goes first, in a transaction so two people
- * opening the chat simultaneously cannot generate two different keys.
+ * opening the chat simultaneously cannot generate two different keys; then
+ * both key copies, together.
  */
 export async function ensureDirectChat(
   me: { uid: string; identity: Identity },
@@ -60,18 +61,51 @@ export async function ensureDirectChat(
   });
 
   if (created) {
-    const conversationKey = await createConversationKey();
-    await Promise.all([
-      setDoc(doc(db(), 'chats', chatId, 'keys', me.uid), {
-        sealed: await sealConversationKey(conversationKey, me.identity.publicKey),
-      }),
-      setDoc(doc(db(), 'chats', chatId, 'keys', peer.uid), {
-        sealed: await sealConversationKey(conversationKey, await fromB64(peer.publicKey)),
-      }),
+    await writeKeys(chatId, me, peer);
+  } else {
+    // A chat whose keys never landed (the tab closed between the chat and its
+    // keys, under the old two-write version) would spin on "Decrypting"
+    // forever. If my copy is missing and nothing has been sent under any key
+    // yet, it is safe to make one now: the rules refuse to overwrite a key
+    // doc, so this can never replace a key that is in use.
+    const [mine, chat] = await Promise.all([
+      getDoc(doc(db(), 'chats', chatId, 'keys', me.uid)),
+      getDoc(chatRef),
     ]);
+    if (!mine.exists() && !chat.data()?.lastMessage) await writeKeys(chatId, me, peer);
   }
 
   return chatId;
+}
+
+/**
+ * One new conversation key, sealed to both members, written in one batch so
+ * the two copies land together or not at all. The chat doc is committed by
+ * now, so the rules' get() on it passes.
+ *
+ * Losing a race to the other member (they wrote the keys first) refuses the
+ * batch; that is fine as long as my copy exists afterwards.
+ */
+async function writeKeys(
+  chatId: string,
+  me: { uid: string; identity: Identity },
+  peer: UserDoc,
+): Promise<void> {
+  const conversationKey = await createConversationKey();
+  const [mineSealed, theirsSealed] = await Promise.all([
+    sealConversationKey(conversationKey, me.identity.publicKey),
+    fromB64(peer.publicKey).then((key) => sealConversationKey(conversationKey, key)),
+  ]);
+
+  const batch = writeBatch(db());
+  batch.set(doc(db(), 'chats', chatId, 'keys', me.uid), { sealed: mineSealed });
+  batch.set(doc(db(), 'chats', chatId, 'keys', peer.uid), { sealed: theirsSealed });
+  try {
+    await batch.commit();
+  } catch (cause) {
+    const mine = await getDoc(doc(db(), 'chats', chatId, 'keys', me.uid)).catch(() => null);
+    if (!mine?.exists()) throw cause;
+  }
 }
 
 /**

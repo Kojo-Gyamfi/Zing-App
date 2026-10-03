@@ -230,7 +230,14 @@ export function Composer({
               }
               // Enter sends on a physical keyboard; Shift+Enter makes a new line.
               // On touch the on-screen return key inserts a newline as expected.
-              if (event.key === 'Enter' && !event.shiftKey && !('ontouchstart' in window)) {
+              if (
+                event.key === 'Enter' &&
+                !event.shiftKey &&
+                // Enter that confirms a Chinese/Japanese/Korean input candidate is
+                // not a send.
+                !event.nativeEvent.isComposing &&
+                !('ontouchstart' in window)
+              ) {
                 event.preventDefault();
                 submit();
               }

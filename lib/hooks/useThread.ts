@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSession } from '@/lib/store/session';
 import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
@@ -143,8 +143,9 @@ export function useThread(chatId: string, peerUid: string | null) {
       conversationKey,
       (next) => {
         // The live window is the newest PAGE_SIZE; each new message pushes
-        // the oldest one out. Once older pages are loaded, that message
-        // would fall into the gap between the two, so hand it over.
+        // the oldest one out. It is handed to the older list rather than
+        // dropped: if history was already scrolled to its start, nothing
+        // would ever fetch it back.
         const edge = next[0]?.createdAt?.getTime();
         const dropped =
           edge === undefined
@@ -157,7 +158,7 @@ export function useThread(chatId: string, peerUid: string | null) {
               );
         liveWindow.current = next;
         if (dropped.length) {
-          setOlder((current) => (current.length ? [...current, ...dropped] : current));
+          setOlder((current) => [...current, ...dropped]);
         }
         setMessages(next);
         setLoading(false);
@@ -175,8 +176,11 @@ export function useThread(chatId: string, peerUid: string | null) {
   const incoming = messages.findLast((message) => message.senderId !== user?.uid);
   const incomingId = incoming?.id;
   const incomingAt = incoming?.createdAt?.getTime();
+  // A thread open in a background tab, or a backgrounded app, has not been
+  // read: no blue ticks until the person can actually see it.
+  const pageVisible = useSyncExternalStore(subscribeVisibility, isPageVisible, () => true);
   useEffect(() => {
-    if (!user || loading || !incomingId || incomingAt === undefined) return;
+    if (!user || loading || !pageVisible || !incomingId || incomingAt === undefined) return;
     if (
       !needsReadReceipt({
         newestIncoming: { id: incomingId, createdAt: new Date(incomingAt) },
@@ -191,7 +195,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     void markRead(chatId, user.uid).catch(() => {
       markedRead.current = null;
     });
-  }, [chatId, user, loading, myReadAt, incomingId, incomingAt]);
+  }, [chatId, user, loading, pageVisible, myReadAt, incomingId, incomingAt]);
 
   const sendText = useCallback(
     async (text: string, replyTo: string | null = null) => {
@@ -402,4 +406,13 @@ export function useThread(chatId: string, peerUid: string | null) {
     loadOlder,
     exhausted,
   };
+}
+
+function subscribeVisibility(onChange: () => void): () => void {
+  document.addEventListener('visibilitychange', onChange);
+  return () => document.removeEventListener('visibilitychange', onChange);
+}
+
+function isPageVisible(): boolean {
+  return document.visibilityState === 'visible';
 }

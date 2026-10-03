@@ -218,10 +218,27 @@ service cloud.firestore {
                || preview.get('ciphertext', '').size() <= MAX_CIPHERTEXT();
       }
 
+      // The ordering and preview fields. updatedAt only ever moves to "now"
+      // (the app writes serverTimestamp()), and a new preview must be one's
+      // own message. Without this a member could date a chat in the year
+      // 2100 -- pinned to the top of the other's list and unread forever --
+      // or plant a preview claiming to come from the other person.
+      function metaChangeOk() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return request.resource.data.keys().hasOnly([
+                 'members', 'lastMessage', 'lastRead', 'lastDelivered', 'unread', 'sent',
+                 'createdAt', 'updatedAt'])
+               && !('createdAt' in changed)
+               && (!('updatedAt' in changed) || request.resource.data.updatedAt == request.time)
+               && (!('lastMessage' in changed)
+                   || request.resource.data.lastMessage.senderId == request.auth.uid);
+      }
+
       // lastMessage / updatedAt / receipts / unread / sent may move; the
       // member list may not.
       allow update: if isMember()
                     && request.resource.data.members == resource.data.members
+                    && metaChangeOk()
                     && ownReceiptOnly('lastRead')
                     && ownReceiptOnly('lastDelivered')
                     && unreadChangeOk()

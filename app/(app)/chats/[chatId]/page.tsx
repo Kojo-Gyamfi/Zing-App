@@ -56,14 +56,52 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  const pinning = useRef(false);
+  // Scrolled up reading history: shows the jump-to-latest button, with a
+  // count of messages that arrived meanwhile.
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [unseen, setUnseen] = useState(0);
+
+  function scrollToBottom(smooth = false) {
+    const node = scroller.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    atBottom.current = true;
+    // A smooth scroll fires scroll events on its way down; until it lands,
+    // those must not mark the reader as "scrolled up", or a second message
+    // arriving mid-scroll would not be followed.
+    // Released on landing, on the reader's own touch or wheel (which cancels
+    // a smooth scroll), or after a second at most.
+    if (smooth) {
+      pinning.current = true;
+      setTimeout(() => (pinning.current = false), 1000);
+    }
+    setAwayFromBottom(false);
+    setUnseen(0);
+  }
+
+  // Keyed on the newest message, not the count: the live window holds the
+  // newest page, so past that size a new message pushes the oldest out and
+  // the count never changes -- which is what stopped the autoscroll.
+  const newest = messages.at(-1);
+  const newestId = newest?.id;
+  const newestMine = newest?.senderId === user?.uid;
+  const seenNewest = useRef<string | undefined>(undefined);
 
   // Follow new messages only when the reader is already at the bottom --
   // yanking someone out of history they are scrolled up reading is worse than
-  // missing an autoscroll.
+  // missing an autoscroll. Otherwise count them on the jump button.
   useEffect(() => {
-    if (!atBottom.current) return;
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [messages.length, peerTyping]);
+    const isNew = newestId !== undefined && newestId !== seenNewest.current;
+    const firstLoad = seenNewest.current === undefined;
+    seenNewest.current = newestId;
+
+    if (atBottom.current || firstLoad) {
+      requestAnimationFrame(() => scrollToBottom(!firstLoad));
+    } else if (isNew && !newestMine) {
+      setUnseen((count) => count + 1);
+    }
+  }, [newestId, newestMine, peerTyping]);
 
   // Opening a chat dismisses its notifications, as WhatsApp does.
   useEffect(() => {
@@ -211,14 +249,23 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
       <div
         ref={scroller}
+        onWheel={() => (pinning.current = false)}
+        onTouchStart={() => (pinning.current = false)}
         onScroll={(event) => {
           const node = event.currentTarget;
-          atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+          const fromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+          if (pinning.current) {
+            if (fromBottom < 80) pinning.current = false;
+            return;
+          }
+          atBottom.current = fromBottom < 80;
+          setAwayFromBottom(fromBottom > 300);
+          if (atBottom.current) setUnseen(0);
           if (node.scrollTop < 120 && !exhausted) void loadOlder();
         }}
         // overflow-x-hidden: a bubble dragged for swipe-to-reply must not
         // widen the scroller.
-        className="min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto px-3 py-3 scroll-thin"
+        className="chat-wallpaper min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto px-3 py-3 scroll-thin"
       >
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-muted">
@@ -269,6 +316,27 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         {peerTyping && !loading && <TypingBubble />}
       </div>
 
+      {(awayFromBottom || unseen > 0) && (
+        <div className="relative">
+          <button
+            onClick={() => scrollToBottom(true)}
+            aria-label={unseen > 0 ? `${unseen} new messages, jump to latest` : 'Jump to latest'}
+            className="absolute right-4 bottom-3 z-20 grid size-10 place-items-center rounded-full
+              border border-line bg-elevated text-muted shadow-lg shadow-black/40
+              transition-colors hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {unseen > 0 && (
+              <span className="absolute -top-2 -right-1 grid h-5 min-w-5 place-items-center rounded-full bg-zing px-1.5 text-[11px] font-semibold text-on-zing">
+                {unseen > 99 ? '99+' : unseen}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
       {notice && (
         <p role="status" className="bg-surface px-4 pt-2 text-center text-[13px] text-danger">
           {notice}
@@ -278,7 +346,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       <Composer
         onSend={handleSend}
         onTyping={ping}
-        disabled={peerDeleted || (!loading && !conversationKey)}
+        disabled={peerDeleted || !conversationKey}
         disabledText={peerDeleted ? 'This account was deleted' : undefined}
         context={composerContext}
         onCancelContext={() => setComposerContext(null)}

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6">
+  <!-- Zing chat wallpaper: one repeating tile of line doodles, WhatsApp style.
+       Two faint inks (teal accent, grey) so the pattern reads as texture and
+       never competes with the bubbles on top of it. -->
+  <g stroke="#00cfc1" stroke-opacity="0.11">
+    <!-- speech bubble with dots -->
+    <path d="M20 22h36a8 8 0 0 1 8 8v16a8 8 0 0 1-8 8H36l-10 8v-8h-6a8 8 0 0 1-8-8V30a8 8 0 0 1 8-8z"/>
+    <path d="M28 38h.01M38 38h.01M48 38h.01" stroke-width="3"/>
+    <!-- lightning bolt -->
+    <path d="M150 14l-14 22h12l-6 20 18-26h-12l8-16z"/>
+    <!-- heart -->
+    <path d="M262 46c-10-7-16-12-16-19a8 8 0 0 1 16-2 8 8 0 0 1 16 2c0 7-6 12-16 19z"/>
+    <!-- padlock -->
+    <path d="M88 108v-8a10 10 0 0 1 20 0v8"/>
+    <rect x="82" y="108" width="32" height="24" rx="5"/>
+    <path d="M98 117v6"/>
+    <!-- sparkle star -->
+    <path d="M214 98l4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+    <!-- music note -->
+    <path d="M24 190v-26l20-5v26"/>
+    <circle cx="19" cy="191" r="5"/>
+    <circle cx="39" cy="186" r="5"/>
+    <!-- paper plane -->
+    <path d="M150 168l40-16-14 40-8-16-18-8z"/>
+    <path d="M168 176l8-8"/>
+    <!-- double tick -->
+    <path d="M250 182l7 7 13-14M262 189l13-14"/>
+    <!-- small bubble -->
+    <path d="M92 250h26a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-4l-6 6v-6H92a6 6 0 0 1-6-6v-10a6 6 0 0 1 6-6z"/>
+    <!-- crescent moon -->
+    <path d="M226 252a16 16 0 1 0 18 22 13 13 0 0 1-18-22z"/>
+  </g>
+  <g stroke="#8a9a9d" stroke-opacity="0.09">
+    <!-- smiley -->
+    <circle cx="104" cy="36" r="13"/>
+    <path d="M98 40s2 4 6 4 6-4 6-4M99 32h.01M109 32h.01"/>
+    <!-- camera -->
+    <path d="M190 32h8l3-5h12l3 5h8a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4h-34a4 4 0 0 1-4-4V36a4 4 0 0 1 4-4z"/>
+    <circle cx="207" cy="45" r="7"/>
+    <!-- coffee cup -->
+    <path d="M22 98h26v14a10 10 0 0 1-10 10h-6a10 10 0 0 1-10-10V98zM48 102h4a5 5 0 0 1 0 10h-4M28 90c0-3 3-3 3-6M36 90c0-3 3-3 3-6"/>
+    <!-- bell -->
+    <path d="M150 96a12 12 0 0 1 12 12v8l4 6h-32l4-6v-8a12 12 0 0 1 12-12zM146 126a4 4 0 0 0 8 0"/>
+    <!-- sun -->
+    <circle cx="278" cy="114" r="8"/>
+    <path d="M278 98v4M278 126v4M262 114h4M290 114h4M267 103l3 3M286 122l3 3M289 103l-3 3M270 122l-3 3"/>
+    <!-- envelope -->
+    <rect x="84" y="166" width="34" height="24" rx="4"/>
+    <path d="M84 170l17 11 17-11"/>
+    <!-- planet -->
+    <circle cx="36" cy="262" r="10"/>
+    <path d="M20 268c-6 4-4 8 6 6 10-2 24-9 30-15 4-5 0-7-6-5"/>
+    <!-- leaf -->
+    <path d="M160 280c0-20 14-30 32-30 0 20-12 30-32 30zM160 280l20-20"/>
+    <!-- tiny stars -->
+    <path d="M128 222l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/>
+    <path d="M296 230l2 4 4 2-4 2-2 4-2-4-4-2 4-2z"/>
+    <path d="M60 140h.01M200 230h.01M300 300h.01M130 300h.01" stroke-width="3"/>
+  </g>
+</svg>

@@ -72,9 +72,15 @@ export default function LoginPage() {
       // Installed PWAs and some in-app browsers block popups outright;
       // redirect is the fallback that always works.
       const code = (cause as { code?: string }).code ?? '';
-      if (code.includes('popup')) {
-        await signInWithRedirect(auth(), googleProvider);
-        return;
+      // Only a blocked popup: "popup-closed-by-user" also contains "popup",
+      // and closing Google's window must not then send you off to Google.
+      if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+        try {
+          await signInWithRedirect(auth(), googleProvider);
+          return;
+        } catch {
+          // Fall through: show the error and free the buttons.
+        }
       }
       // Closing Google's window is not an error worth shouting about.
       if (!code.includes('cancelled') && !code.includes('closed-by-user')) {

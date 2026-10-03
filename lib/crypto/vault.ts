@@ -38,6 +38,11 @@ function database() {
           instance.createObjectStore(KEYS_STORE);
         }
       },
+    }).catch((cause: unknown) => {
+      // Not cached: a failed open (storage blocked, a private window) would
+      // otherwise fail every later call for the rest of the session.
+      db = null;
+      throw cause;
     });
   }
   return db;
