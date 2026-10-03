@@ -11,30 +11,40 @@ import { Splash } from '@/components/Splash';
 import { returnPath } from '@/lib/returnTo';
 import { setLoginIntent, type LoginIntent } from '@/lib/loginIntent';
 import {
-  completeLink,
-  emailLinkError,
-  isEmailLink,
+  emailCodeError,
   looksLikeEmail,
-  sendLink,
-} from '@/lib/auth/emailLink';
+  requestCode,
+  verifyCode,
+} from '@/lib/auth/emailCodeClient';
+
+/** Matches the server's one-code-a-minute limit. */
+const RESEND_AFTER_S = 60;
 
 export default function LoginPage() {
   const router = useRouter();
   const status = useSession((state) => state.status);
   // null until one of the two first buttons is pressed.
   const [intent, setIntent] = useState<LoginIntent | null>(null);
-  const [busy, setBusy] = useState<'google' | 'email' | 'paste' | null>(null);
+  const [busy, setBusy] = useState<'google' | 'email' | 'code' | 'resend' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [googleError, setGoogleError] = useState<string | null>(null);
 
   const [email, setEmail] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
-  const [pasted, setPasted] = useState('');
+  const [code, setCode] = useState('');
+  const [resendIn, setResendIn] = useState(0);
 
   useEffect(() => {
     if (status === 'ready') router.replace(returnPath());
     if (status === 'needsProfile') router.replace('/onboarding');
     if (status === 'locked') router.replace('/unlock');
   }, [status, router]);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const timer = setTimeout(() => setResendIn((value) => value - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [resendIn]);
 
   if (status === 'loading') return <Splash />;
 
@@ -46,14 +56,15 @@ export default function LoginPage() {
 
   function back() {
     setIntent(null);
+    setGoogleError(null);
     setSentTo(null);
-    setPasted('');
+    setCode('');
     setError(null);
   }
 
   async function withGoogle() {
     setBusy('google');
-    setError(null);
+    setGoogleError(null);
     try {
       await signInWithPopup(auth(), googleProvider);
     } catch (cause) {
@@ -66,43 +77,43 @@ export default function LoginPage() {
       }
       // Closing Google's window is not an error worth shouting about.
       if (!code.includes('cancelled') && !code.includes('closed-by-user')) {
-        setError('Could not sign in. Check your connection and try again.');
+        setGoogleError('Could not sign in with Google. Check your connection and try again.');
       }
       setBusy(null);
     }
   }
 
-  async function withEmail() {
+  async function sendCode(resend = false) {
     if (!intent) return;
-    if (!looksLikeEmail(email)) {
+    const address = resend && sentTo ? sentTo : email.trim();
+    if (!looksLikeEmail(address)) {
       setError('That doesn’t look like a valid email address.');
       return;
     }
-    setBusy('email');
+    setBusy(resend ? 'resend' : 'email');
     setError(null);
     try {
-      const next = returnPath();
-      await sendLink(email, intent, next === '/chats' ? undefined : next);
-      setSentTo(email.trim());
+      // "I already have an account" is checked here: an unknown address is
+      // refused before any email goes out.
+      await requestCode(address, intent);
+      setSentTo(address);
+      setCode('');
+      setResendIn(RESEND_AFTER_S);
     } catch (cause) {
-      setError(emailLinkError(cause));
+      setError(emailCodeError(cause));
     }
     setBusy(null);
   }
 
-  async function withPastedLink() {
+  async function checkCode() {
     if (!sentTo) return;
-    if (!isEmailLink(pasted.trim())) {
-      setError('That isn’t a Zing sign-in link. Copy the whole link from the email.');
-      return;
-    }
-    setBusy('paste');
+    setBusy('code');
     setError(null);
     try {
       // Session status takes it from here.
-      await completeLink(pasted, sentTo);
+      await verifyCode(sentTo, code);
     } catch (cause) {
-      setError(emailLinkError(cause));
+      setError(emailCodeError(cause));
       setBusy(null);
     }
   }
@@ -124,8 +135,6 @@ export default function LoginPage() {
       </div>
 
       <div className="space-y-4 pb-8">
-        {error && <p className="text-center text-[13px] text-danger">{error}</p>}
-
         {intent === null ? (
           <>
             <Button onClick={() => choose('signup')} className="w-full">
@@ -146,58 +155,68 @@ export default function LoginPage() {
             </p>
           </>
         ) : sentTo ? (
-          <>
-            <div className="space-y-2 rounded-2xl border border-line bg-surface p-4">
-              <p className="text-[14px] font-medium text-ink">Check your email</p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void checkCode();
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-1 text-center">
+              <p className="text-[15px] font-medium text-ink">Check your email</p>
               <p className="text-[13px] leading-relaxed text-muted">
-                We sent a sign-in link to <span className="text-ink">{sentTo}</span>. Tap it to
-                continue. Not there? Look in Junk or Spam.
-              </p>
-              <p className="text-[13px] leading-relaxed text-muted">
-                Using Zing from your home screen? Press and hold the link in the email, copy it,
-                and paste it here.
+                We sent a 6-digit code to <span className="text-ink">{sentTo}</span>. Not there?
+                Check Spam.
               </p>
             </div>
 
             <Field
-              label="Sign-in link"
-              type="url"
-              inputMode="url"
-              value={pasted}
-              onChange={(event) => setPasted(event.target.value)}
-              placeholder="Paste the link from the email"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
+              label="Code"
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456"
+              maxLength={6}
+              error={error}
+              className="text-center tracking-[0.4em]"
             />
 
             <Button
-              onClick={() => void withPastedLink()}
-              busy={busy === 'paste'}
-              disabled={busy !== null || !pasted.trim()}
+              type="submit"
+              busy={busy === 'code'}
+              disabled={busy !== null || code.length !== 6}
               className="w-full"
             >
-              Sign in with link
+              Verify
             </Button>
 
             <div className="flex justify-between">
-              <button onClick={back} className="text-[13px] font-medium text-muted">
-                Back
-              </button>
               <button
+                type="button"
                 onClick={() => {
                   setSentTo(null);
-                  setPasted('');
+                  setCode('');
                   setError(null);
                 }}
-                className="text-[13px] font-medium text-zing"
+                className="text-[13px] font-medium text-muted"
               >
                 Use a different email
               </button>
+              <button
+                type="button"
+                onClick={() => void sendCode(true)}
+                disabled={busy !== null || resendIn > 0}
+                className="text-[13px] font-medium text-zing disabled:opacity-40"
+              >
+                {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Resend code'}
+              </button>
             </div>
-          </>
+          </form>
         ) : (
           <>
+            {googleError && <p className="text-center text-[13px] text-danger">{googleError}</p>}
+
             <Button
               onClick={() => void withGoogle()}
               busy={busy === 'google'}
@@ -209,14 +228,14 @@ export default function LoginPage() {
 
             <div className="flex items-center gap-3 text-[12px] text-faint">
               <span className="h-px flex-1 bg-line" />
-              or
+              or use your email
               <span className="h-px flex-1 bg-line" />
             </div>
 
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                void withEmail();
+                void sendCode();
               }}
               className="space-y-3"
             >
@@ -226,11 +245,15 @@ export default function LoginPage() {
                 inputMode="email"
                 autoComplete="email"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  setError(null);
+                }}
                 placeholder="you@icloud.com"
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
+                error={error}
               />
               <Button
                 type="submit"
@@ -239,7 +262,7 @@ export default function LoginPage() {
                 disabled={busy !== null || !email.trim()}
                 className="w-full border border-line"
               >
-                Email me a sign-in link
+                Continue
               </Button>
             </form>
 

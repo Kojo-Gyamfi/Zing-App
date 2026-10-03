@@ -3,6 +3,7 @@
  * sign up, find each other, send, reply, edit, delete, and get history back
  * on a "new device" with the passphrase and then with the recovery key.
  */
+import { createHash } from 'node:crypto';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
 const PASSPHRASE = 'correct horse battery staple';
@@ -44,33 +45,27 @@ async function signInWithGoogle(page: Page, handle: string) {
 }
 
 /**
- * Ask for an email sign-in link and return it. The Auth emulator sends no
- * mail; it lists the links it would have sent.
+ * The code the server would have emailed. Under the emulators it skips the
+ * email and keeps the code on its (server-only) doc, which the emulator's
+ * owner credential can read.
  */
-async function requestEmailLink(page: Page, email: string): Promise<string> {
-  await page.goto('/login');
-  await page.getByRole('button', { name: 'Create an account' }).click();
-  await page.getByLabel('Email').fill(email);
-  await page.getByRole('button', { name: 'Email me a sign-in link' }).click();
-  await expect(page.getByText('Check your email')).toBeVisible();
-
+async function emailedCode(page: Page, email: string): Promise<string> {
+  const id = createHash('sha256').update(email.toLowerCase()).digest('hex');
   const response = await page.request.get(
-    'http://127.0.0.1:9099/emulator/v1/projects/demo-zing/oobCodes',
+    `http://127.0.0.1:8080/v1/projects/demo-zing/databases/(default)/documents/emailCodes/${id}`,
+    { headers: { Authorization: 'Bearer owner' } },
   );
-  const { oobCodes } = (await response.json()) as {
-    oobCodes: { email: string; requestType: string; oobLink: string }[];
-  };
-  const oobLink = oobCodes
-    .filter((code) => code.email === email && code.requestType === 'EMAIL_SIGNIN')
-    .at(-1)?.oobLink;
-  expect(oobLink).toBeTruthy();
+  expect(response.ok()).toBe(true);
+  const { fields } = (await response.json()) as { fields: { devCode: { stringValue: string } } };
+  return fields.devCode.stringValue;
+}
 
-  // What a real email's link resolves to: our finish page, with Firebase's
-  // one-time code appended.
-  const emulated = new URL(oobLink!).searchParams;
-  const link = new URL(emulated.get('continueUrl')!);
-  for (const key of ['mode', 'oobCode', 'apiKey']) link.searchParams.set(key, emulated.get(key)!);
-  return link.toString();
+/** Ask for a code from the login page's email box. */
+async function requestCode(page: Page, button: string, email: string) {
+  await page.goto('/login');
+  await page.getByRole('button', { name: button }).click();
+  await page.getByLabel('Email').fill(email);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
 }
 
 /** Onboard a freshly signed-in account. Returns the recovery key shown at the end. */
@@ -215,32 +210,42 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await expect(alice.getByRole('main').getByText('hi alice')).toBeVisible();
 });
 
-test('signs up with an email link, on any provider, and can delete the account', async ({
+test('signs up with an emailed code, on any provider, and can delete the account', async ({
   browser,
 }) => {
   const carol = await newPhone(browser);
   const handle = `carol_${run}`;
   const email = `${handle}@icloud.com`;
 
-  // A link opened in another browser (or a home-screen app) has no stored
-  // address: the finish page asks for it.
-  const firstLink = await requestEmailLink(carol, email);
-  const elsewhere = await newPhone(browser);
-  await elsewhere.goto(firstLink);
-  await expect(elsewhere.getByRole('heading', { name: 'Confirm your email' })).toBeVisible();
-  await elsewhere.getByLabel('Email').fill(email);
-  await elsewhere.getByRole('button', { name: 'Continue' }).click();
-  await expect(elsewhere).toHaveURL(/\/onboarding/);
-  await elsewhere.context().close();
+  // "I already have an account" with an address nobody registered: refused
+  // on the spot, and no code is made.
+  await requestCode(carol, 'I already have an account', email);
+  await expect(carol.getByText('No Zing account uses this email. Check it and try again.')).toBeVisible();
 
-  // The usual case: the same browser, through the pasted-link box. That
-  // signs in the same account the other browser just created.
-  const link = await requestEmailLink(carol, email);
-  await carol.getByLabel('Sign-in link').fill(link);
-  await carol.getByRole('button', { name: 'Sign in with link' }).click();
+  // Signing up instead: a code is sent. A wrong one is refused.
+  await requestCode(carol, 'Create an account', email);
+  await expect(carol.getByText('Check your email')).toBeVisible();
+  const code = await emailedCode(carol, email);
+  const wrong = code === '000000' ? '111111' : '000000';
+  await carol.getByLabel('Code').fill(wrong);
+  await carol.getByRole('button', { name: 'Verify' }).click();
+  await expect(carol.getByText('That code isn’t right. Check the email and try again.')).toBeVisible();
+
+  await carol.getByLabel('Code').fill(code);
+  await carol.getByRole('button', { name: 'Verify' }).click();
   await onboard(carol, handle);
 
-  // Freshly signed in, so deletion needs no second link.
+  // Now the account exists, "I already have an account" gets past the
+  // account check -- straight into the one-code-a-minute limit, since a
+  // code went to this address moments ago.
+  const other = await newPhone(browser);
+  await requestCode(other, 'I already have an account', email);
+  await expect(
+    other.getByText('Too many codes asked for. Wait a minute and try again.'),
+  ).toBeVisible();
+  await other.context().close();
+
+  // Freshly signed in, so deletion needs no second code.
   await carol.goto('/settings');
   await carol.getByRole('button', { name: 'Delete my account' }).click();
   await carol.getByLabel(`Type ${handle} to confirm`).fill(handle);

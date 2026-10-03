@@ -14,8 +14,9 @@ import {
 import { formatPhone, limitPhoneInput } from '@/lib/phone';
 import { enablePush, isIOS, pushState, type PushState } from '@/lib/push';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
-import { deleteAccount, NEEDS_FRESH_LINK } from '@/lib/db/account';
-import { sendLink } from '@/lib/auth/emailLink';
+import { deleteAccount, NEEDS_FRESH_SIGNIN } from '@/lib/db/account';
+import { emailCodeError, requestCode, verifyCode } from '@/lib/auth/emailCodeClient';
+import { auth } from '@/lib/firebase/client';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -32,27 +33,42 @@ export default function SettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Set when an email account is asked to confirm with a fresh code.
+  const [deleteCodeSentTo, setDeleteCodeSentTo] = useState<string | null>(null);
+  const [deleteCode, setDeleteCode] = useState('');
+
   async function removeAccount() {
     if (!user || !profile) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      await deleteAccount(user, profile.username);
+      if (deleteCodeSentTo) {
+        // Signing in again with the code is what makes the sign-in recent.
+        try {
+          await verifyCode(deleteCodeSentTo, deleteCode);
+        } catch (cause) {
+          setDeleteError(emailCodeError(cause));
+          setDeleting(false);
+          return;
+        }
+      }
+      // After a fresh sign-in, the current user object is the one with the
+      // new credentials.
+      await deleteAccount(auth().currentUser ?? user, profile.username);
       // Forget the key on this device; the auth account is already gone.
       await signOut();
     } catch (cause) {
       const code = (cause as { code?: string }).code ?? '';
-      if (code === NEEDS_FRESH_LINK && user.email) {
-        // Nothing has been deleted yet. The link brings them back here.
-        const sent = await sendLink(user.email, 'signin', '/settings').then(
-          () => true,
-          () => false,
-        );
-        setDeleteError(
-          sent
-            ? `To confirm it's you, open the link we just emailed to ${user.email}, then delete again.`
-            : 'Could not send a confirmation email. Check your connection and try again.',
-        );
+      if (code === NEEDS_FRESH_SIGNIN && user.email) {
+        // Nothing has been deleted yet.
+        try {
+          await requestCode(user.email, 'signin');
+          setDeleteCodeSentTo(user.email);
+          setDeleteCode('');
+          setDeleteError(null);
+        } catch (sendCause) {
+          setDeleteError(emailCodeError(sendCause));
+        }
         setDeleting(false);
         return;
       }
@@ -471,8 +487,22 @@ export default function SettingsPage() {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                error={deleteError}
+                error={deleteCodeSentTo ? null : deleteError}
               />
+              {deleteCodeSentTo && (
+                <Field
+                  label={`Code sent to ${deleteCodeSentTo}`}
+                  hint="To confirm it's you, enter the 6-digit code we just emailed."
+                  value={deleteCode}
+                  onChange={(event) =>
+                    setDeleteCode(event.target.value.replace(/\D/g, '').slice(0, 6))
+                  }
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  error={deleteError}
+                />
+              )}
               <div className="flex gap-2">
                 <Button
                   variant="ghost"
@@ -480,6 +510,8 @@ export default function SettingsPage() {
                     setConfirmingDelete(false);
                     setDeleteConfirm('');
                     setDeleteError(null);
+                    setDeleteCodeSentTo(null);
+                    setDeleteCode('');
                   }}
                 >
                   Cancel
@@ -487,7 +519,10 @@ export default function SettingsPage() {
                 <Button
                   variant="danger"
                   busy={deleting}
-                  disabled={deleteConfirm.trim().toLowerCase() !== profile.username}
+                  disabled={
+                    deleteConfirm.trim().toLowerCase() !== profile.username ||
+                    (deleteCodeSentTo !== null && deleteCode.length !== 6)
+                  }
                   onClick={() => void removeAccount()}
                 >
                   Delete forever

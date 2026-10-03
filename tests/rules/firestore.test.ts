@@ -333,6 +333,18 @@ describe('server-only data', () => {
     await assertFails(setDoc(doc(as('alice'), 'pushLimits', 'alice'), { count: 0, windowStart: 0 }));
   });
 
+  it('keeps email sign-in codes and their limits away from clients', async () => {
+    for (const client of [as('alice'), env.unauthenticatedContext().firestore() as unknown as Firestore]) {
+      await assertFails(getDoc(doc(client, 'emailCodes', 'anything')));
+      await assertFails(getDocs(query(collectionGroup(client, 'emailCodes'))));
+      await assertFails(
+        setDoc(doc(client, 'emailCodes', 'anything'), { hash: 'h', expiresAt: 0, attempts: 0 }),
+      );
+      await assertFails(getDoc(doc(client, 'emailCodeLimits', 'anything')));
+      await assertFails(setDoc(doc(client, 'emailCodeLimits', 'anything'), { count: 0 }));
+    }
+  });
+
   it('keeps private docs owner-only', async () => {
     await assertFails(getDoc(doc(as('carol'), 'users/alice/private/account')));
     await assertFails(getDoc(doc(as('carol'), 'users/alice/private/recovery')));
