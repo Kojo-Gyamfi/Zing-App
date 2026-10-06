@@ -16,6 +16,7 @@ import {
 import {
   collectionGroup,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -311,6 +312,86 @@ describe('messages', () => {
     const edit = { ciphertext: 'new', nonce: 'n2', editedAt: serverTimestamp() };
     await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'm1'), edit));
   });
+
+  it('marks a forwarded message only at send time, and only as a boolean', async () => {
+    await assertSucceeds(
+      setDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'fwd'), message({ forwarded: true })),
+    );
+    await assertFails(
+      setDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'fwd2'), message({ forwarded: 'from bob' })),
+    );
+    // Not added afterwards, by the sender or anyone.
+    await setDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'plain'), message());
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'plain'), { forwarded: true }));
+  });
+
+  it('refuses a message that arrives with reactions already on it', async () => {
+    await assertFails(
+      setDoc(
+        doc(as('alice'), 'chats', CHAT, 'messages', 'pre'),
+        message({ reactions: { bob: { ciphertext: 'r', nonce: 'n' } } }),
+      ),
+    );
+  });
+});
+
+describe('reactions', () => {
+  const sealed = { ciphertext: 'sealed-emoji', nonce: 'n' };
+  const m1 = (uid: string) => doc(as(uid), 'chats', CHAT, 'messages', 'm1');
+
+  it('lets any member set and clear their own reaction', async () => {
+    // m1 is Bob's message: Alice, who did not send it, may still react.
+    await assertSucceeds(updateDoc(m1('alice'), { 'reactions.alice': sealed }));
+    await assertSucceeds(updateDoc(m1('bob'), { 'reactions.bob': sealed }));
+    await assertSucceeds(updateDoc(m1('alice'), { 'reactions.alice': deleteField() }));
+  });
+
+  it("never touches someone else's reaction, or anything besides reactions", async () => {
+    await updateDoc(m1('bob'), { 'reactions.bob': sealed });
+    await assertFails(updateDoc(m1('alice'), { 'reactions.bob': deleteField() }));
+    await assertFails(
+      updateDoc(m1('alice'), {
+        'reactions.bob': { ciphertext: 'swapped', nonce: 'n' },
+        'reactions.alice': sealed,
+      }),
+    );
+    await assertFails(updateDoc(m1('alice'), { 'reactions.alice': sealed, ciphertext: 'forged' }));
+  });
+
+  it('keeps outsiders and oversized or misshapen reactions out', async () => {
+    await assertFails(updateDoc(m1('carol'), { 'reactions.carol': sealed }));
+    await assertFails(
+      updateDoc(m1('alice'), { 'reactions.alice': { ciphertext: 'x'.repeat(201), nonce: 'n' } }),
+    );
+    await assertFails(updateDoc(m1('alice'), { 'reactions.alice': '👍' }));
+    await assertFails(updateDoc(m1('alice'), { 'reactions.alice': { ...sealed, extra: true } }));
+  });
+
+  it('go with the message when the sender deletes it for everyone, and stop after', async () => {
+    await updateDoc(m1('alice'), { 'reactions.alice': sealed });
+    await assertSucceeds(
+      updateDoc(m1('bob'), {
+        ciphertext: deleteField(),
+        nonce: deleteField(),
+        reactions: deleteField(),
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      }),
+    );
+    await assertFails(updateDoc(m1('alice'), { 'reactions.alice': sealed }));
+  });
+
+  it('refuses a delete for everyone that leaves reactions behind', async () => {
+    await updateDoc(m1('alice'), { 'reactions.alice': sealed });
+    await assertFails(
+      updateDoc(m1('bob'), {
+        ciphertext: deleteField(),
+        nonce: deleteField(),
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      }),
+    );
+  });
 });
 
 describe('conversation keys', () => {
@@ -338,6 +419,35 @@ describe('"Delete for me" lists', () => {
     await assertFails(
       getDocs(query(collectionGroup(as('bob'), 'hidden'), where('uid', '==', 'alice'))),
     );
+  });
+});
+
+describe('starred lists', () => {
+  it('belong to their owner only', async () => {
+    const mine = doc(as('alice'), 'chats', CHAT, 'starred', 'alice');
+    await assertSucceeds(setDoc(mine, { uid: 'alice', ids: ['m1'] }));
+    await assertFails(setDoc(mine, { uid: 'bob', ids: ['m1'] }));
+    await assertFails(getDoc(doc(as('bob'), 'chats', CHAT, 'starred', 'alice')));
+    await assertFails(setDoc(doc(as('carol'), 'chats', CHAT, 'starred', 'carol'), { uid: 'carol', ids: [] }));
+  });
+
+  it('can be listed across chats by their owner, and nobody else', async () => {
+    await setDoc(doc(as('alice'), 'chats', CHAT, 'starred', 'alice'), { uid: 'alice', ids: ['m1'] });
+    await assertSucceeds(
+      getDocs(query(collectionGroup(as('alice'), 'starred'), where('uid', '==', 'alice'))),
+    );
+    await assertFails(
+      getDocs(query(collectionGroup(as('bob'), 'starred'), where('uid', '==', 'alice'))),
+    );
+  });
+});
+
+describe('chat preferences', () => {
+  it('live on the owner-only account doc', async () => {
+    const prefs = { pinned: [CHAT], muted: [CHAT], archived: [] };
+    await assertSucceeds(setDoc(doc(as('alice'), 'users/alice/private/account'), prefs, { merge: true }));
+    await assertFails(getDoc(doc(as('bob'), 'users/alice/private/account')));
+    await assertFails(setDoc(doc(as('bob'), 'users/alice/private/account'), prefs, { merge: true }));
   });
 });
 

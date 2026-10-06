@@ -20,10 +20,27 @@ export type UserDoc = {
   createdAt: Timestamp;
 };
 
-/** users/{uid}/private/account -- readable by its owner and the push route only. */
+/**
+ * users/{uid}/private/account -- readable by its owner and the push route only.
+ *
+ * The chat preferences live here rather than in a doc of their own because
+ * the push route already reads this doc for every message: it skips a muted
+ * chat at no extra read, and does not push at all rather than leave the
+ * service worker to swallow it (browsers revoke push from a worker that
+ * receives pushes and shows nothing).
+ */
 export type AccountDoc = {
   pushTokens: string[];
+  /** Chat ids shown at the top of the list, at most MAX_PINNED. */
+  pinned?: string[];
+  /** Chat ids that get no push notifications. */
+  muted?: string[];
+  /** Chat ids moved out of the main list into "Archived". */
+  archived?: string[];
 };
+
+/** Like WhatsApp: pinning is for the few chats that matter most. */
+export const MAX_PINNED = 3;
 
 /**
  * users/{uid}/private/recovery -- owner-only. The private key wrapped a second
@@ -85,9 +102,33 @@ export type MessageDoc = {
   createdAt: Timestamp;
   /** Id of the quoted message. Only the id: the quote is rendered from local plaintext. */
   replyTo: string | null;
+  /**
+   * Sent with Forward rather than typed. Metadata like replyTo: the server
+   * sees that a message was forwarded, never what it says or where from.
+   */
+  forwarded?: boolean;
   editedAt?: Timestamp;
   deleted?: boolean;
+  /**
+   * One reaction per member, keyed by uid. The emoji is sealed under the
+   * conversation key like a message body, so the server sees only that
+   * someone reacted, never with what.
+   */
+  reactions?: Record<string, { ciphertext: string; nonce: string }>;
 };
+
+/**
+ * chats/{chatId}/hidden/{uid} ("Delete for me") and chats/{chatId}/starred/{uid}.
+ * `uid` repeats the doc id so one collection-group query finds all of a
+ * person's lists.
+ */
+export type MessageListDoc = {
+  uid: string;
+  ids: string[];
+};
+
+/** Longest reaction accepted, in UTF-16 units: one emoji with modifiers. */
+export const MAX_REACTION_LENGTH = 16;
 
 /** Senders may edit for this long after sending, like WhatsApp. Mirrored in firestore.rules. */
 export const EDIT_WINDOW_MS = 15 * 60 * 1000;
@@ -112,6 +153,10 @@ export type DecryptedMessage = {
   deleted: boolean;
   /** True while the write is still in flight -- drives the clock icon. */
   pending: boolean;
+  /** Decrypted reactions, uid -> emoji. Ones that fail to open are left out. */
+  reactions?: Record<string, string>;
+  /** Shows the "Forwarded" label. */
+  forwarded?: boolean;
   /** The server refused the write. Held in memory only, so it can be retried. */
   failed?: boolean;
 };

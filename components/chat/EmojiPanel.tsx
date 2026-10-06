@@ -25,7 +25,8 @@ export function EmojiPanel({
   onBackspace,
 }: {
   onPick: (emoji: string) => void;
-  onBackspace: () => void;
+  /** Composer only; a reaction picker has nothing to delete. */
+  onBackspace?: () => void;
 }) {
   // Only mounted after the person taps the emoji button, so storage is
   // available and there is no server render to match.
@@ -87,17 +88,19 @@ export function EmojiPanel({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          onClick={onBackspace}
-          aria-label="Delete"
-          className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:text-ink"
-        >
-          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z" />
-            <path d="m17.5 9.5-5 5M12.5 9.5l5 5" />
-          </svg>
-        </button>
+        {onBackspace && (
+          <button
+            type="button"
+            onClick={onBackspace}
+            aria-label="Delete"
+            className="grid size-10 shrink-0 place-items-center rounded-full text-muted hover:text-ink"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z" />
+              <path d="m17.5 9.5-5 5M12.5 9.5l5 5" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div ref={scroller} onScroll={onScroll} className="relative flex-1 overflow-y-auto px-2 pb-2 scroll-thin">

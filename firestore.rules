@@ -270,6 +270,16 @@ service cloud.firestore {
         allow delete: if isSelf(uid);
       }
 
+      // Starred messages: ids one member has starred, same shape and same
+      // privacy as the "Delete for me" list above.
+      match /starred/{uid} {
+        allow read: if isSelf(uid) && request.auth.uid in chatMembers(chatId);
+        allow create, update: if isSelf(uid)
+                              && request.auth.uid in chatMembers(chatId)
+                              && request.resource.data.get('uid', uid) == uid;
+        allow delete: if isSelf(uid);
+      }
+
       match /messages/{messageId} {
         allow read: if signedIn() && request.auth.uid in chatMembers(chatId);
 
@@ -283,23 +293,38 @@ service cloud.firestore {
                       && request.resource.data.ciphertext.size() <= MAX_CIPHERTEXT()
                       && request.resource.data.nonce is string
                       && request.resource.data.createdAt == request.time
-                      && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt']);
+                      && request.resource.data.get('forwarded', false) is bool
+                      && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt', 'reactions']);
 
-        // Only the sender may change a message, and only in two shapes. A
-        // deleted message is final.
+        // A reaction: a sealed emoji (see MessageDoc.reactions), or absent.
+        // Sized for one emoji -- 16 UTF-16 units seal to well under 200.
+        function reactionOk(reaction) {
+          return reaction == null
+                 || (reaction is map
+                     && reaction.keys().hasOnly(['ciphertext', 'nonce'])
+                     && reaction.ciphertext is string
+                     && reaction.ciphertext.size() <= 200
+                     && reaction.nonce is string
+                     && reaction.nonce.size() <= 64);
+        }
+
+        // Three shapes of change, and a deleted message takes none of them.
         //
-        // Edit: new ciphertext and nonce, within 15 minutes of sending (keep in
-        // step with EDIT_WINDOW_MS in lib/db/schema.ts).
+        // Edit (sender only): new ciphertext and nonce, within 15 minutes of
+        // sending (keep in step with EDIT_WINDOW_MS in lib/db/schema.ts).
         //
-        // Delete for everyone: ciphertext and nonce removed outright, leaving a
-        // tombstone with nothing to decrypt.
+        // Delete for everyone (sender only): ciphertext, nonce and reactions
+        // removed outright, leaving a tombstone with nothing to decrypt.
+        //
+        // React (any member): your own entry in `reactions` and nothing else,
+        // so nobody can put words -- or emoji -- in the other person's mouth.
         allow update: if signedIn()
-                      && resource.data.senderId == request.auth.uid
                       && request.auth.uid in chatMembers(chatId)
                       && !resource.data.get('deleted', false)
                       && (
                         (
-                          request.resource.data.diff(resource.data).affectedKeys()
+                          resource.data.senderId == request.auth.uid
+                          && request.resource.data.diff(resource.data).affectedKeys()
                             .hasOnly(['ciphertext', 'nonce', 'editedAt'])
                           && request.resource.data.ciphertext is string
                           && request.resource.data.ciphertext.size() <= MAX_CIPHERTEXT()
@@ -307,11 +332,19 @@ service cloud.firestore {
                           && request.resource.data.editedAt == request.time
                           && request.time < resource.data.createdAt + duration.value(15, 'm')
                         ) || (
-                          request.resource.data.diff(resource.data).affectedKeys()
-                            .hasOnly(['ciphertext', 'nonce', 'deleted', 'deletedAt'])
+                          resource.data.senderId == request.auth.uid
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['ciphertext', 'nonce', 'reactions', 'deleted', 'deletedAt'])
                           && request.resource.data.deleted == true
                           && request.resource.data.deletedAt == request.time
-                          && !request.resource.data.keys().hasAny(['ciphertext', 'nonce'])
+                          && !request.resource.data.keys().hasAny(['ciphertext', 'nonce', 'reactions'])
+                        ) || (
+                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+                          && request.resource.data.reactions is map
+                          && request.resource.data.reactions
+                               .diff(resource.data.get('reactions', {})).affectedKeys()
+                               .hasOnly([request.auth.uid])
+                          && reactionOk(request.resource.data.reactions.get(request.auth.uid, null))
                         )
                       );
 
@@ -326,6 +359,11 @@ service cloud.firestore {
     // (The doc id is unknown while a query is evaluated, so the check is on
     // the field alone; the write rules keep the field equal to the id.)
     match /{path=**}/hidden/{uid} {
+      allow list: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // The same for starred lists: the Starred screen's one query.
+    match /{path=**}/starred/{uid} {
       allow list: if signedIn() && resource.data.uid == request.auth.uid;
     }
 

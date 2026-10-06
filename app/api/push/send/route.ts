@@ -75,6 +75,10 @@ export async function POST(request: Request) {
   const senderName = (sender.data()?.displayName as string) ?? 'Someone';
 
   const targets = recipients.flatMap((doc) => {
+    // Muted: no push at all. Leaving it to the service worker to stay quiet
+    // is not an option -- browsers expect every push to show something, and
+    // revoke the subscription of a worker that keeps showing nothing.
+    if (((doc.data()?.muted ?? []) as string[]).includes(chatId)) return [];
     const tokens = (doc.data()?.pushTokens ?? []) as string[];
     // doc is users/{uid}/private/account, so the uid is two levels up.
     return tokens.map((token) => ({ uid: doc.ref.parent.parent!.id, token }));

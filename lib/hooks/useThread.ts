@@ -12,9 +12,13 @@ import {
   deleteMessage,
   hideMessage,
   subscribeHidden,
+  subscribeStarred,
+  setStarred,
+  setReaction,
   loadOlderMessages,
   PAGE_SIZE,
 } from '@/lib/db/messages';
+import { withReaction } from '@/lib/reactions';
 import { markRead, onConversationKeyReady, subscribeChat, type ChatSummary } from '@/lib/db/chats';
 import { needsReadReceipt } from '@/lib/receipts';
 import { notifyPeers } from '@/lib/notify';
@@ -22,6 +26,7 @@ import { subscribePresence, subscribeTyping, setTyping, type Presence } from '@/
 import type { DecryptedMessage, UserDoc } from '@/lib/db/schema';
 
 const TYPING_THROTTLE = 2000;
+const NO_IDS: ReadonlySet<string> = new Set();
 
 /**
  * Everything one conversation needs: the key, the decrypted messages, the
@@ -115,6 +120,16 @@ export function useThread(chatId: string, peerUid: string | null) {
   useEffect(() => {
     if (!user) return;
     return subscribeHidden(chatId, user.uid, (ids) => setHidden({ chatId, ids }));
+  }, [chatId, user]);
+
+  // Starred, tagged with its chat like `hidden` above.
+  const [starred, setStarredIds] = useState<{ chatId: string; ids: Set<string> }>({
+    chatId,
+    ids: new Set(),
+  });
+  useEffect(() => {
+    if (!user) return;
+    return subscribeStarred(chatId, user.uid, (ids) => setStarredIds({ chatId, ids }));
   }, [chatId, user]);
 
   // Receipts for the messages I sent, live while the thread is open. Taken
@@ -235,7 +250,7 @@ export function useThread(chatId: string, peerUid: string | null) {
   }, [chatId, user, loading, pageVisible, myReadAt, incomingId, incomingAt]);
 
   const sendText = useCallback(
-    async (text: string, replyTo: string | null = null) => {
+    async (text: string, replyTo: string | null = null, forwarded = false) => {
       if (!user || !conversationKey || !text.trim()) return;
 
       setTyping(chatId, user.uid, false);
@@ -248,6 +263,7 @@ export function useThread(chatId: string, peerUid: string | null) {
         text: text.trim(),
         conversationKey,
         replyTo,
+        forwarded,
       });
 
       committed.then(
@@ -266,6 +282,7 @@ export function useThread(chatId: string, peerUid: string | null) {
               text: text.trim(),
               createdAt: sentAt,
               replyTo,
+              forwarded,
               edited: false,
               deleted: false,
               pending: false,
@@ -283,7 +300,7 @@ export function useThread(chatId: string, peerUid: string | null) {
       if (!message?.text) return;
 
       setFailed((current) => current.filter((entry) => entry.id !== id));
-      void sendText(message.text, message.replyTo);
+      void sendText(message.text, message.replyTo, message.forwarded);
     },
     [failed, sendText],
   );
@@ -358,8 +375,69 @@ export function useThread(chatId: string, peerUid: string | null) {
         });
         flash('Could not delete that message.');
       });
+      // A message deleted for me should not live on under Starred.
+      if (starred.chatId === chatId && starred.ids.has(id)) {
+        void setStarred(chatId, user.uid, id, false).catch(() => undefined);
+      }
+    },
+    [chatId, user, flash, starred],
+  );
+
+  /** React, change a reaction, or take it back (emoji null). */
+  const react = useCallback(
+    (id: string, emoji: string | null) => {
+      if (!user || !conversationKey) return;
+
+      // The live page shows it from the local cache at once; an older page is
+      // static, so it is patched by hand like an edit.
+      const before = older.find((message) => message.id === id);
+      if (before) patchOlder(id, { reactions: withReaction(before.reactions, user.uid, emoji) });
+      setReaction({ chatId, messageId: id, uid: user.uid, emoji, conversationKey }).catch(() => {
+        if (before) patchOlder(id, before);
+        flash('Could not react to that message.');
+      });
+    },
+    [chatId, user, conversationKey, older, patchOlder, flash],
+  );
+
+  const toggleStar = useCallback(
+    (id: string, on: boolean) => {
+      if (!user) return;
+      setStarred(chatId, user.uid, id, on).catch(() =>
+        flash(on ? 'Could not star that message.' : 'Could not unstar that message.'),
+      );
     },
     [chatId, user, flash],
+  );
+
+  /**
+   * Forward plaintext into another chat: sealed afresh under that chat's own
+   * key, so nothing is shared between the two conversations. False when that
+   * chat's key cannot be had (it is still being set up).
+   */
+  const forward = useCallback(
+    async (text: string, target: string): Promise<boolean> => {
+      if (!user || !identity) return false;
+      if (target === chatId) {
+        await sendText(text, null, true);
+        return true;
+      }
+      const key = await keyFor(target, user.uid, identity);
+      if (!key) return false;
+      const { envelope, committed } = await send({
+        chatId: target,
+        senderId: user.uid,
+        text,
+        conversationKey: key,
+        forwarded: true,
+      });
+      committed.then(
+        () => void notifyPeers(target, envelope),
+        () => undefined,
+      );
+      return true;
+    },
+    [chatId, user, identity, keyFor, sendText],
   );
 
   /** Throttled: one RTDB write every couple of seconds, not one per keystroke. */
@@ -436,6 +514,10 @@ export function useThread(chatId: string, peerUid: string | null) {
     editText,
     deleteForEveryone,
     deleteForMe,
+    react,
+    starredIds: starred.chatId === chatId ? starred.ids : NO_IDS,
+    toggleStar,
+    forward,
     retry,
     discard,
     notice,

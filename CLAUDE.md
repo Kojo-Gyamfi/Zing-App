@@ -112,8 +112,19 @@ rather than letting every decryption fail mysteriously.
   what lets each see the other's phone number). The rules hold each member to their own key.
 - **A new chat doc starts empty** — the create rule refuses any `sent`, receipts, badge or preview,
   or one member could pre-claim things about the other.
-- **Hidden ("Delete for me") lists carry a `uid` field** so the chat list can fetch all of one
-  user's lists in a single collection-group query.
+- **Hidden ("Delete for me") and starred lists carry a `uid` field** so one collection-group query
+  fetches all of one user's lists (the chat list for hidden, the Starred screen for starred). Both are
+  ids only, at `chats/{chatId}/hidden|starred/{uid}`, private to their owner.
+- **Reactions are sealed like message bodies**: `messages/{id}.reactions.{uid}` holds an envelope
+  from `envelope.ts`, never a bare emoji. The rules let any member write only their own entry, and
+  "delete for everyone" removes reactions with the ciphertext.
+- **Pin, mute and archive live on `users/{uid}/private/account`** next to the push tokens, because the
+  push route already reads that doc: a muted chat is skipped there at no extra read. Mute must never
+  be done in the service worker — browsers revoke push from a worker that shows nothing.
+- **Forwarding re-seals plaintext under the target chat's key**; nothing links the two conversations.
+  The copy carries `forwarded: true` for the label — metadata like `replyTo`, set only at send time.
+- **The open thread takes its receipts from the chat list's listener** (`lib/store/chats.ts`) rather
+  than listening to the chat doc itself — two listeners on one doc bill every receipt twice.
 - **A key doc can appear after its chat** (see above), so anything that loads a conversation key
   must cope with "not yet" — `useThread` watches for it with `onConversationKeyReady`.
 - **Optional services are env-gated**: App Check (`NEXT_PUBLIC_RECAPTCHA_SITE_KEY`) and Sentry
@@ -141,4 +152,5 @@ Other manual checks live in README.md ("Testing it works").
 ## Out of scope for v1
 
 Encrypted media, group chats, voice/video calls, forward secrecy (one key per conversation, not per
-message), server-side search, contact discovery (browsers cannot read a phone's contacts).
+message), server-side search (search inside a chat runs over plaintext on the device, `lib/search.ts`),
+contact discovery (browsers cannot read a phone's contacts).

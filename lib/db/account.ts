@@ -51,8 +51,8 @@ async function confirmIdentity(user: User): Promise<void> {
  *
  * Removed: the profile and with it the public key and passphrase backup, the
  * @username and phone claims (both free for someone else to take), push
- * tokens, the recovery backup, the phone number, every "Delete for me" list,
- * presence, and the sign-in account itself.
+ * tokens and chat preferences, the recovery backup, the phone number, every
+ * "Delete for me" and starred list, presence, and the sign-in account itself.
  *
  * Kept: chats and messages. They belong to the other person as well, and they
  * are ciphertext that nobody can open once the key is gone -- including from
@@ -70,13 +70,15 @@ export async function deleteAccount(user: User, username: string): Promise<void>
   // Unregister this browser from push while the account doc still exists.
   await disablePush(uid).catch(() => undefined);
 
-  // Hidden lists first, in batches of their own: someone with hundreds of
-  // chats would otherwise overflow the main batch.
-  const hidden = await getDocs(query(collectionGroup(db(), 'hidden'), where('uid', '==', uid)));
-  for (let start = 0; start < hidden.docs.length; start += BATCH_LIMIT) {
-    const batch = writeBatch(db());
-    hidden.docs.slice(start, start + BATCH_LIMIT).forEach((entry) => batch.delete(entry.ref));
-    await batch.commit();
+  // Hidden and starred lists first, in batches of their own: someone with
+  // hundreds of chats would otherwise overflow the main batch.
+  for (const kind of ['hidden', 'starred']) {
+    const lists = await getDocs(query(collectionGroup(db(), kind), where('uid', '==', uid)));
+    for (let start = 0; start < lists.docs.length; start += BATCH_LIMIT) {
+      const batch = writeBatch(db());
+      lists.docs.slice(start, start + BATCH_LIMIT).forEach((entry) => batch.delete(entry.ref));
+      await batch.commit();
+    }
   }
 
   // Claims are deleted only if they are still there and still ours: on a
