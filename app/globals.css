@@ -54,12 +54,31 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The browser paints an autofilled field with its own background, which only
+   covers the <input> -- not the padding, prefix or reveal button of the box
+   around it. Keep the input clear and let the box (Field.tsx) show the state.
+   The UA rule is !important, so the colour is held off with a transition. */
+input:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-ink);
+  caret-color: var(--color-ink);
+  transition: background-color 600000s 0s;
+}
+
 /* Notch and home-indicator padding, used by the app shell. */
 @utility pt-safe {
   padding-top: env(safe-area-inset-top);
 }
 @utility pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Teal halo for the logo art. The PNGs have transparent backgrounds, so the
+   glow follows the shape of the mark instead of a square. */
+@utility glow-zing {
+  filter: drop-shadow(0 0 28px color-mix(in oklab, var(--color-zing) 35%, transparent));
+}
+@utility glow-zing-sm {
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--color-zing) 40%, transparent));
 }
 
 /* The message list scrolls; nothing else does. */
@@ -69,10 +88,12 @@ body {
 }
 
 /* WhatsApp-style doodle wallpaper behind a conversation. It stays put while
-   the messages scroll over it, as WhatsApp's does. */
+   the messages scroll over it, as WhatsApp's does. The 320px tile is drawn
+   down to 180px so each doodle lands around 20px, WhatsApp's scale. The tile
+   comes from scripts/gen-chat-doodles.mjs -- edit that, not the SVG. */
 @utility chat-wallpaper {
   background-color: var(--color-void);
   background-image: url('/chat-doodles.svg');
-  background-size: 320px 320px;
+  background-size: 180px 180px;
   background-repeat: repeat;
 }

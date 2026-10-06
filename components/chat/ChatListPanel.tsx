@@ -38,7 +38,7 @@ export function ChatListPanel() {
       <header className="flex items-center gap-3 px-4 pt-safe pb-3">
         <div className="flex flex-1 items-center gap-2 pt-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/zing-logo.png" alt="" className="size-8 rounded-lg" />
+          <img src="/zing-mark.png" alt="" className="size-8 glow-zing-sm" />
           <h1 className="text-xl font-bold tracking-tight">Zing</h1>
         </div>
 

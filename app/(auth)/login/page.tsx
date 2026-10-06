@@ -129,12 +129,9 @@ export default function LoginPage() {
     <AuthFrame className="justify-between">
       <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/zing-logo.png" alt="" className="size-40 rounded-[36px]" />
-
-        <div className="space-y-2">
-          <h1 className="text-3xl font-bold tracking-tight">Zing</h1>
-          <p className="text-[15px] text-muted">Fast. Lively. Connected.</p>
-        </div>
+        <img src="/zing-logo-dark.png" alt="" className="w-56 glow-zing" />
+        {/* The artwork carries the wordmark and tagline; the heading stays for screen readers. */}
+        <h1 className="sr-only">Zing</h1>
 
         <p className="max-w-xs text-[13px] leading-relaxed text-faint">
           Every message is encrypted on your device. Not even we can read them.

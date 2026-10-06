@@ -16,8 +16,8 @@
  * ciphertext.
  */
 
-const CACHE = 'zing-shell-v2';
-const SHELL = ['/', '/chats', '/offline', '/zing-logo.png', '/icon-192.png'];
+const CACHE = 'zing-shell-v3';
+const SHELL = ['/', '/chats', '/offline', '/zing-logo-dark.png', '/zing-mark.png', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

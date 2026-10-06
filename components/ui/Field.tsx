@@ -25,7 +25,7 @@ export function Field({ label, hint, error, prefix, className = '', id, type, ..
 
       <div
         className={`flex items-center gap-1 rounded-2xl border bg-surface px-4
-          transition-colors focus-within:border-zing
+          transition-colors focus-within:border-zing has-[input:autofill]:bg-zing/10
           ${error ? 'border-danger' : 'border-line'}`}
       >
         {prefix && <span className="text-muted select-none">{prefix}</span>}
