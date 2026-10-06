@@ -141,8 +141,12 @@ test('two people chat end to end, and history survives a new device', async ({ b
   // Send: Bob receives it decrypted, with an unread badge on his list.
   await send(alice, 'hello bob');
   await expect(bob.getByLabel('1 unread')).toBeVisible();
+  // Bob's list acknowledging it is the second tick on Alice's open thread --
+  // which takes its receipts from her own list's listener, not one of its own.
+  await expect(alice.getByRole('main').getByRole('img', { name: 'Delivered' })).toBeVisible();
   await bob.locator('li').getByText(aliceHandle).click();
   await expect(bob.getByRole('main').getByText('hello bob')).toBeVisible();
+  await expect(alice.getByRole('main').getByRole('img', { name: 'Read' })).toBeVisible();
 
   // Reply.
   await openMenu(bob, 'hello bob');

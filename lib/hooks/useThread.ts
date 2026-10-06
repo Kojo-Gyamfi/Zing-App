@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSession } from '@/lib/store/session';
 import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
+import { useChats } from '@/lib/store/chats';
 import {
   subscribeMessages,
   sendMessage as send,
@@ -14,7 +15,7 @@ import {
   loadOlderMessages,
   PAGE_SIZE,
 } from '@/lib/db/messages';
-import { markRead, onConversationKeyReady, subscribeChat } from '@/lib/db/chats';
+import { markRead, onConversationKeyReady, subscribeChat, type ChatSummary } from '@/lib/db/chats';
 import { needsReadReceipt } from '@/lib/receipts';
 import { notifyPeers } from '@/lib/notify';
 import { subscribePresence, subscribeTyping, setTyping, type Presence } from '@/lib/db/presence';
@@ -40,10 +41,6 @@ export function useThread(chatId: string, peerUid: string | null) {
   const [peerTyping, setPeerTyping] = useState(false);
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
-  const [peerReadAt, setPeerReadAt] = useState<Date | null>(null);
-  const [peerDeliveredAt, setPeerDeliveredAt] = useState<Date | null>(null);
-  // My own read receipt as the server has it -- null while unconfirmed.
-  const [myReadAt, setMyReadAt] = useState<Date | null | undefined>(undefined);
   const markedRead = useRef<string | null>(null);
   const [failed, setFailed] = useState<(DecryptedMessage & { chatId: string })[]>([]);
 
@@ -103,7 +100,8 @@ export function useThread(chatId: string, peerUid: string | null) {
 
   useEffect(() => {
     if (!peerUid) return;
-    void loadProfile(peerUid).then(setPeer);
+    // Fresh: the page checks this profile's public key for changes.
+    void loadProfile(peerUid, { fresh: true }).then(setPeer);
 
     const stopPresence = subscribePresence(peerUid, setPresence);
     const stopTyping = subscribeTyping(chatId, peerUid, setPeerTyping);
@@ -119,21 +117,60 @@ export function useThread(chatId: string, peerUid: string | null) {
     return subscribeHidden(chatId, user.uid, (ids) => setHidden({ chatId, ids }));
   }, [chatId, user]);
 
-  // Receipts for the messages I sent, live while the thread is open.
-  useEffect(() => {
-    if (!peerUid) return;
+  // Receipts for the messages I sent, live while the thread is open. Taken
+  // from the chat list's listener, which already has this doc: a second
+  // listener here would pay for every receipt twice (lib/store/chats.ts).
+  const uid = user?.uid;
+  const listReady = useChats((state) => uid !== undefined && state.owner === uid);
+  const listed = useChats((state) => (state.owner === uid ? state.chats[chatId] : undefined));
+  const listedConfirmed = useChats((state) =>
+    state.owner === uid ? state.confirmed[chatId] : undefined,
+  );
+  const inList = listed !== undefined;
 
-    return subscribeChat(chatId, (chat) => {
-      setPeerReadAt(chat?.lastRead?.[peerUid]?.toDate?.() ?? null);
-      setPeerDeliveredAt(chat?.lastDelivered?.[peerUid]?.toDate?.() ?? null);
-      // Skipped while our own write is pending: that value is this device's
-      // clock, not the server's, and comparing against it is what caused the
-      // delivery-receipt write loop.
-      if (!chat?.pending && user) {
-        setMyReadAt(chat?.lastRead?.[user.uid]?.toDate?.() ?? null);
-      }
-    });
-  }, [chatId, peerUid, user]);
+  // Only for a chat the list does not hold -- older than its loaded pages, or
+  // the list's listener refused -- does the thread listen for itself.
+  const [direct, setDirect] = useState<{
+    chatId: string;
+    latest: ChatSummary | null;
+    confirmed: ChatSummary | null | undefined;
+  } | null>(null);
+  useEffect(() => {
+    if (!peerUid || !listReady || inList) return;
+    return subscribeChat(chatId, (chat) =>
+      setDirect((previous) => ({
+        chatId,
+        latest: chat,
+        // Same rule as the store: a pending write's timestamps are this
+        // device's clock, so keep the last confirmed copy instead.
+        confirmed: chat?.pending
+          ? previous?.chatId === chatId
+            ? previous.confirmed
+            : undefined
+          : chat,
+      })),
+    );
+  }, [chatId, peerUid, listReady, inList]);
+
+  const ownDirect = !inList && direct?.chatId === chatId ? direct : null;
+  const latest = inList ? listed : ownDirect?.latest;
+  // undefined: not confirmed by the server yet. null: the chat does not exist.
+  const confirmed = inList ? listedConfirmed : ownDirect?.confirmed;
+
+  // As epoch ms, so a fresh snapshot of an unchanged receipt is not a "change"
+  // to the effects below; memoised back into Dates on that number alone.
+  const peerReadMs = peerUid ? (latest?.lastRead?.[peerUid]?.toDate?.()?.getTime() ?? null) : null;
+  const peerDeliveredMs = peerUid
+    ? (latest?.lastDelivered?.[peerUid]?.toDate?.()?.getTime() ?? null)
+    : null;
+  const myReadMs =
+    !peerUid || !uid || confirmed === undefined
+      ? undefined
+      : (confirmed?.lastRead?.[uid]?.toDate?.()?.getTime() ?? null);
+  const peerReadAt = useMemo(() => asDate(peerReadMs), [peerReadMs]);
+  const peerDeliveredAt = useMemo(() => asDate(peerDeliveredMs), [peerDeliveredMs]);
+  // My own read receipt as the server has it -- undefined while unconfirmed.
+  const myReadAt = useMemo(() => asDate(myReadMs), [myReadMs]);
 
   useEffect(() => {
     if (!conversationKey) return;
@@ -406,6 +443,10 @@ export function useThread(chatId: string, peerUid: string | null) {
     loadOlder,
     exhausted,
   };
+}
+
+function asDate<T extends null | undefined>(ms: number | T): Date | T {
+  return typeof ms === 'number' ? new Date(ms) : ms;
 }
 
 function subscribeVisibility(onChange: () => void): () => void {

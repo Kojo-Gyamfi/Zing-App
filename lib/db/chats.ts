@@ -1,6 +1,7 @@
 import {
   doc,
   getDoc,
+  getDocFromCache,
   updateDoc,
   collection,
   query,
@@ -120,7 +121,12 @@ export async function loadConversationKey(
   uid: string,
   identity: Identity,
 ): Promise<Uint8Array | null> {
-  const snapshot = await getDoc(doc(db(), 'chats', chatId, 'keys', uid));
+  const ref = doc(db(), 'chats', chatId, 'keys', uid);
+  // Key docs never change -- the rules refuse every update and delete -- so a
+  // copy in the offline cache is as good as the server's, and costs no read.
+  // Only a key this device has never fetched goes to the network.
+  const cached = await getDocFromCache(ref).catch(() => null);
+  const snapshot = cached?.exists() ? cached : await getDoc(ref);
   if (!snapshot.exists()) return null;
 
   const { sealed } = snapshot.data() as { sealed: string };

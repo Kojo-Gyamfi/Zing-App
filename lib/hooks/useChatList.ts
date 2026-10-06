@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from '@/lib/store/session';
 import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
+import { useChats } from '@/lib/store/chats';
 import { subscribeChats, markDelivered, CHAT_PAGE_SIZE, type ChatSummary } from '@/lib/db/chats';
 import { decryptPreview, latestVisibleMessage, subscribeAllHidden, DELETED_LABEL } from '@/lib/db/messages';
 import { needsDeliveryReceipt } from '@/lib/receipts';
@@ -42,6 +43,8 @@ export function useChatList() {
   const { user, identity } = useSession();
   const keyFor = useKeys((state) => state.get);
   const loadProfile = useProfiles((state) => state.load);
+  const publishChats = useChats((state) => state.publish);
+  const resetChats = useChats((state) => state.reset);
 
   const [rows, setRows] = useState<ChatListRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +74,25 @@ export function useChatList() {
       (next, more) => {
         setChats(next);
         setHasMore(more);
+        // The open thread reads its receipts from these. See lib/store/chats.ts.
+        publishChats(uid, next);
       },
       // Refused or failed: show what we have (or the empty state), not a
-      // spinner forever.
-      () => setLoading(false),
+      // spinner forever. Publishing nothing sends the thread to its own
+      // listener rather than leaving it waiting on this one.
+      () => {
+        setLoading(false);
+        publishChats(uid, []);
+      },
     );
-  }, [uid, identity, max]);
+  }, [uid, identity, max, publishChats]);
+
+  // Not on every resubscribe (loadMore raises max): only when the account
+  // changes or the list goes away, so the thread's ticks do not blink.
+  useEffect(() => {
+    if (!uid) return;
+    return () => resetChats();
+  }, [uid, resetChats]);
 
   useEffect(() => {
     if (!uid) return;

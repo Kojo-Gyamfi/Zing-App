@@ -7,9 +7,11 @@ import type { Identity } from '@/lib/crypto/types';
 /**
  * Session cache of unsealed conversation keys.
  *
- * Unsealing costs a Firestore read plus an X25519 operation, and the chat list
+ * Unsealing costs a key-doc lookup plus an X25519 operation, and the chat list
  * needs every key at once to decrypt its previews. Caching keeps that to one
- * fetch per conversation per session.
+ * lookup per conversation per session -- and the lookup itself is served from
+ * Firestore's offline cache once this device has seen the key (see
+ * loadConversationKey), so it is a billed read only the first time.
  *
  * Deliberately memory-only: keys are never written back to disk, so closing
  * the tab discards them. The private key in IndexedDB can always re-derive

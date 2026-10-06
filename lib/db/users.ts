@@ -1,6 +1,7 @@
 import {
   doc,
   getDoc,
+  getDocFromCache,
   setDoc,
   updateDoc,
   runTransaction,
@@ -16,6 +17,16 @@ import { normalizePhone, tryNormalizePhone } from '@/lib/phone';
 export async function getUser(uid: string): Promise<UserDoc | null> {
   const snapshot = await getDoc(doc(db(), 'users', uid));
   return snapshot.exists() ? (snapshot.data() as UserDoc) : null;
+}
+
+/**
+ * This device's cached copy of a profile, without touching the network.
+ * Undefined when there is none -- including a cached "does not exist", which
+ * is worth confirming with the server before calling an account deleted.
+ */
+export async function getCachedUser(uid: string): Promise<UserDoc | undefined> {
+  const snapshot = await getDocFromCache(doc(db(), 'users', uid)).catch(() => null);
+  return snapshot?.exists() ? (snapshot.data() as UserDoc) : undefined;
 }
 
 export function normalizeUsername(raw: string): string {
