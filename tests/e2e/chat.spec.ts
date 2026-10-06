@@ -190,6 +190,68 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await expect(bob.getByRole('main').getByText('oops wrong chat')).toHaveCount(0);
   await expect(bob.getByRole('main').getByText('This message was deleted').first()).toBeVisible();
 
+  // React: Bob's 👍 reaches Alice (sealed in transit), and he can take it back.
+  await openMenu(bob, 'see you at 6');
+  await bob.getByRole('button', { name: 'React 👍' }).click();
+  await expect(alice.getByRole('main').getByRole('button', { name: /^Reactions: 👍 1$/ })).toBeVisible();
+  await bob.getByRole('main').getByRole('button', { name: /including yours/ }).click();
+  await expect(alice.getByRole('main').getByRole('button', { name: /^Reactions:/ })).toHaveCount(0);
+
+  // Forward: sealed again for the chosen chat (here, the same one).
+  await openMenu(bob, 'keyboard stays');
+  await bob.getByRole('button', { name: 'Forward' }).click();
+  await bob.getByRole('dialog', { name: 'Forward to' }).getByRole('button', { name: new RegExp(aliceHandle) }).click();
+  await expect(alice.getByRole('main').getByText('keyboard stays', { exact: true })).toHaveCount(2);
+  // Labelled as forwarded on both sides -- the copy, not the original.
+  await expect(alice.getByRole('main').getByText('Forwarded', { exact: true })).toHaveCount(1);
+  await expect(bob.getByRole('main').getByText('Forwarded', { exact: true })).toHaveCount(1);
+
+  // On a wide screen, hovering a bubble offers the menu without a right-click.
+  // (The emulated phone reports no hover, so the arrow stays transparent here;
+  // the click still proves it is wired up.) A message in the live window, so
+  // the reaction reaches Bob's open thread.
+  await alice.setViewportSize({ width: 1280, height: 800 });
+  const recent = alice
+    .locator('[id^="m-"]')
+    .filter({ has: alice.getByText('burst 32', { exact: true }) });
+  await recent.hover();
+  await recent.getByRole('button', { name: 'Message options' }).click();
+  await expect(alice.getByRole('dialog', { name: 'Message actions' })).toBeVisible();
+  await alice.getByRole('button', { name: 'React 😂' }).click();
+  await expect(bob.getByRole('main').getByRole('button', { name: /^Reactions: 😂 1$/ })).toBeVisible();
+  await alice.setViewportSize({ width: 412, height: 915 });
+
+  // Search inside the chat runs over what this device decrypted.
+  await bob.getByRole('button', { name: 'Search this chat' }).click();
+  await bob.getByRole('textbox', { name: 'Search this chat' }).fill('SEE YOU');
+  await expect(bob.getByText('1 of 1')).toBeVisible();
+  await expect(bob.getByRole('main').locator('mark')).toHaveText('see you');
+  await bob.getByRole('button', { name: 'Close search' }).click();
+
+  // Star, then find it on the Starred screen and jump back to it.
+  await openMenu(bob, 'see you at 6');
+  await bob.getByRole('button', { name: 'Star', exact: true }).click();
+  await expect(bob.getByRole('main').getByRole('img', { name: 'Starred' })).toBeVisible();
+  await bob.goto('/starred');
+  await bob.getByText('see you at 6').click();
+  await expect(bob).toHaveURL(/\/chats\/.+_.+#m-/);
+  await expect(bob.getByRole('main').getByText('see you at 6')).toBeVisible();
+
+  // Mute and archive from the chat list, then bring it back.
+  await bob.goto('/chats');
+  const row = () => bob.getByRole('link', { name: new RegExp(aliceHandle) });
+  await row().dispatchEvent('contextmenu');
+  await bob.getByRole('button', { name: 'Mute notifications' }).click();
+  await expect(row().getByRole('img', { name: 'Muted' })).toBeVisible();
+  await row().dispatchEvent('contextmenu');
+  await bob.getByRole('button', { name: 'Archive chat' }).click();
+  await expect(row()).toHaveCount(0);
+  await bob.getByRole('button', { name: 'Archived' }).click();
+  await row().dispatchEvent('contextmenu');
+  await bob.getByRole('button', { name: 'Unarchive chat' }).click();
+  await bob.getByRole('button', { name: 'Back to chats' }).click();
+  await expect(row()).toBeVisible();
+
   // New device: the key is gone, the passphrase brings history back.
   await wipeDevice(alice);
   await expect(alice).toHaveURL(/\/unlock/);

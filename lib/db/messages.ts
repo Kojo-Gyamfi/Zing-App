@@ -14,13 +14,22 @@ import {
   deleteField,
   increment,
   setDoc,
+  updateDoc,
   arrayUnion,
+  arrayRemove,
+  documentId,
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
 import { seal, open } from '@/lib/crypto/envelope';
 import type { Envelope } from '@/lib/crypto/types';
-import { MAX_MESSAGE_LENGTH, type MessageDoc, type DecryptedMessage } from './schema';
+import {
+  MAX_MESSAGE_LENGTH,
+  MAX_REACTION_LENGTH,
+  type MessageDoc,
+  type MessageListDoc,
+  type DecryptedMessage,
+} from './schema';
 
 export const PAGE_SIZE = 30;
 
@@ -47,6 +56,8 @@ export async function sendMessage(params: {
   text: string;
   conversationKey: Uint8Array;
   replyTo?: string | null;
+  /** Sent with Forward: shows the "Forwarded" label on both sides. */
+  forwarded?: boolean;
 }): Promise<{ id: string; envelope: Envelope; committed: Promise<void> }> {
   if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
@@ -61,6 +72,8 @@ export async function sendMessage(params: {
     type: 'text',
     createdAt: serverTimestamp(),
     replyTo: params.replyTo ?? null,
+    // Only when true, so an ordinary message keeps its usual shape.
+    ...(params.forwarded ? { forwarded: true } : {}),
   });
 
   // Chat ids are the two uids sorted and joined, so the recipient needs no lookup.
@@ -105,7 +118,45 @@ async function decrypt(
     edited: !deleted && Boolean(data.editedAt),
     deleted,
     pending: entry.metadata.hasPendingWrites,
+    reactions: deleted ? {} : await openReactions(data.reactions, conversationKey),
+    forwarded: !deleted && data.forwarded === true,
   };
+}
+
+async function openReactions(
+  sealed: MessageDoc['reactions'],
+  conversationKey: Uint8Array,
+): Promise<Record<string, string>> {
+  if (!sealed) return {};
+  const opened = await Promise.all(
+    Object.entries(sealed).map(async ([uid, envelope]) => {
+      const emoji = envelope?.ciphertext && envelope.nonce ? await open(envelope, conversationKey) : null;
+      // Anything longer than one emoji did not come from this app.
+      return emoji && emoji.length <= MAX_REACTION_LENGTH ? ([uid, emoji] as const) : null;
+    }),
+  );
+  return Object.fromEntries(opened.filter((entry) => entry !== null));
+}
+
+/**
+ * React to a message, or take a reaction back (emoji null). One reaction per
+ * member: a new one replaces the old. The rules let each member write only
+ * their own entry.
+ */
+export async function setReaction(params: {
+  chatId: string;
+  messageId: string;
+  uid: string;
+  emoji: string | null;
+  conversationKey: Uint8Array;
+}): Promise<void> {
+  if (params.emoji !== null && params.emoji.length > MAX_REACTION_LENGTH) {
+    throw new Error('REACTION_TOO_LONG');
+  }
+  await updateDoc(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
+    [`reactions.${params.uid}`]:
+      params.emoji === null ? deleteField() : await seal(params.emoji, params.conversationKey),
+  });
 }
 
 /**
@@ -148,6 +199,7 @@ export async function editMessage(params: {
  * Delete for everyone. The doc stays as a tombstone -- so replies to it and
  * pagination keep working -- but the ciphertext and nonce are removed, so there
  * is nothing left in Firestore to decrypt even for someone holding the key.
+ * Reactions go with it.
  */
 export async function deleteMessage(params: {
   chatId: string;
@@ -160,6 +212,7 @@ export async function deleteMessage(params: {
   batch.update(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
     ciphertext: deleteField(),
     nonce: deleteField(),
+    reactions: deleteField(),
     deleted: true,
     deletedAt: serverTimestamp(),
   });
@@ -206,6 +259,82 @@ export function subscribeHidden(
 
 export async function hideMessage(chatId: string, uid: string, messageId: string): Promise<void> {
   await setDoc(hiddenRef(chatId, uid), { uid, ids: arrayUnion(messageId) }, { merge: true });
+}
+
+/**
+ * Starred messages: the same shape as "Delete for me" -- ids only, one list per
+ * member per chat, private to that member. The Starred screen finds every list
+ * with one collection-group query and decrypts the messages on the device.
+ */
+const starredRef = (chatId: string, uid: string) => doc(db(), 'chats', chatId, 'starred', uid);
+
+export function subscribeStarred(
+  chatId: string,
+  uid: string,
+  onChange: (ids: Set<string>) => void,
+) {
+  return onSnapshot(
+    starredRef(chatId, uid),
+    (snapshot) => onChange(new Set((snapshot.data()?.ids as string[] | undefined) ?? [])),
+    () => onChange(new Set()),
+  );
+}
+
+export async function setStarred(
+  chatId: string,
+  uid: string,
+  messageId: string,
+  starred: boolean,
+): Promise<void> {
+  await setDoc(
+    starredRef(chatId, uid),
+    { uid, ids: starred ? arrayUnion(messageId) : arrayRemove(messageId) },
+    { merge: true },
+  );
+}
+
+export type StarredMessage = DecryptedMessage & { chatId: string };
+
+/**
+ * Every message this person starred, newest first, decrypted locally. One
+ * query for the lists, then the messages themselves 30 at a time (Firestore's
+ * cap on an `in` filter). Reads scale with the number of stars, and only when
+ * the Starred screen is opened.
+ */
+export async function loadStarredMessages(
+  uid: string,
+  keyFor: (chatId: string) => Promise<Uint8Array | null>,
+): Promise<StarredMessage[]> {
+  const lists = await getDocs(query(collectionGroup(db(), 'starred'), where('uid', '==', uid)));
+
+  const perChat = await Promise.all(
+    lists.docs.map(async (list) => {
+      const chatId = list.ref.parent.parent!.id;
+      const ids = (list.data() as MessageListDoc).ids ?? [];
+      const key = ids.length ? await keyFor(chatId) : null;
+      if (!key) return [];
+
+      const pages = await Promise.all(
+        Array.from({ length: Math.ceil(ids.length / 30) }, (_, page) =>
+          getDocs(
+            query(
+              collection(db(), 'chats', chatId, 'messages'),
+              where(documentId(), 'in', ids.slice(page * 30, page * 30 + 30)),
+            ),
+          ),
+        ),
+      );
+      return Promise.all(
+        pages
+          .flatMap((snapshot) => snapshot.docs)
+          .map(async (entry) => ({ ...(await decrypt(entry, key)), chatId })),
+      );
+    }),
+  );
+
+  return perChat
+    .flat()
+    .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
 }
 
 /**

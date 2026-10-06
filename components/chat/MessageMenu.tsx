@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { EDIT_WINDOW_MS, type DecryptedMessage } from '@/lib/db/schema';
+import { QUICK_REACTIONS } from '@/lib/reactions';
+import { EmojiPanel } from './EmojiPanel';
 
 /**
  * Long-press / right-click actions for one message.
@@ -13,22 +15,44 @@ import { EDIT_WINDOW_MS, type DecryptedMessage } from '@/lib/db/schema';
 export function MessageMenu({
   message,
   mine,
+  myReaction,
+  starred,
+  canReact,
   onReply,
   onEdit,
   onDelete,
   onDeleteForMe,
+  onReact,
+  onStar,
+  onForward,
   onClose,
 }: {
   message: DecryptedMessage;
   mine: boolean;
+  /** The emoji I already put on this message, if any. */
+  myReaction: string | null;
+  starred: boolean;
+  /** False while the conversation key is missing: nothing to seal with. */
+  canReact: boolean;
   onReply: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onDeleteForMe: () => void;
+  /** Null takes my reaction back. */
+  onReact: (emoji: string | null) => void;
+  onStar: (on: boolean) => void;
+  onForward: () => void;
   onClose: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  // Picking the emoji I already have takes it back, as on WhatsApp.
+  function react(emoji: string) {
+    onReact(emoji === myReaction ? null : emoji);
+    onClose();
+  }
 
   // Read once when the menu opens: a menu left open past the window just
   // fails on save, and the rules say why.
@@ -67,11 +91,42 @@ export function MessageMenu({
         className="w-full max-w-md rounded-t-3xl border-t border-line bg-surface p-3
           pb-[max(0.75rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
       >
-        {message.text !== null && (
+        {canReact && !message.deleted && !confirming && (
+          <div className="mx-1 mb-2 flex items-center justify-between gap-1 rounded-full bg-elevated p-1">
+            {QUICK_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => react(emoji)}
+                aria-label={`React ${emoji}`}
+                aria-pressed={myReaction === emoji}
+                className={`grid size-10 place-items-center rounded-full text-[24px] leading-none
+                  transition-transform active:scale-90
+                  ${myReaction === emoji ? 'bg-zing/25' : 'hover:bg-line'}`}
+              >
+                {emoji}
+              </button>
+            ))}
+            <button
+              onClick={() => setPicking((open) => !open)}
+              aria-label="More reactions"
+              aria-expanded={picking}
+              className={`grid size-10 place-items-center rounded-full text-muted transition-colors
+                hover:text-ink ${picking ? 'bg-line text-ink' : ''}`}
+            >
+              <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {picking && !confirming && <EmojiPanel onPick={react} />}
+
+        {message.text !== null && !picking && (
           <p className="mx-3 mt-2 mb-3 line-clamp-3 text-[14px] text-muted">{message.text}</p>
         )}
 
-        {confirming ? (
+        {picking ? null : confirming ? (
           <div className="space-y-2 p-3">
             <p className="text-[15px] font-medium text-ink">Delete message?</p>
             <p className="pb-1 text-[13px] leading-relaxed text-muted">
@@ -123,6 +178,26 @@ export function MessageMenu({
                 label={copied ? 'Copied' : 'Copy'}
                 icon="M8 8h11v12H8zM5 16V4h11"
                 onClick={() => void copy()}
+              />
+            )}
+            {message.text !== null && !message.deleted && (
+              <Action
+                label="Forward"
+                icon="M14 8l5 4-5 4M19 12h-9a5 5 0 0 0-5 5v1"
+                onClick={() => {
+                  onForward();
+                  onClose();
+                }}
+              />
+            )}
+            {!message.deleted && !message.pending && (
+              <Action
+                label={starred ? 'Unstar' : 'Star'}
+                icon="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
+                onClick={() => {
+                  onStar(!starred);
+                  onClose();
+                }}
               />
             )}
             {editable && (

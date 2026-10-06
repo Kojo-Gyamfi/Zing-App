@@ -2,6 +2,7 @@
 
 import { use, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
 import { useThread } from '@/lib/hooks/useThread';
 import { dayLabel, lastSeenLabel } from '@/lib/format';
@@ -13,17 +14,26 @@ import { Composer, type ComposerContext } from '@/components/chat/Composer';
 import { TypingBubble, TypingDots } from '@/components/chat/TypingDots';
 import { tickState } from '@/components/chat/Ticks';
 import { ChatInfoSheet } from '@/components/chat/ChatInfoSheet';
+import { ForwardSheet } from '@/components/chat/ForwardSheet';
 import type { DecryptedMessage } from '@/lib/db/schema';
 import { clearChatNotifications } from '@/lib/push';
 import { acceptPeerKey, peerKeyChanged } from '@/lib/keyWatch';
+import { findMatches } from '@/lib/search';
+import { summarizeReactions } from '@/lib/reactions';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
   const { user } = useSession();
+  const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<DecryptedMessage | null>(null);
+  const [forwarding, setForwarding] = useState<DecryptedMessage | null>(null);
   const [composerContext, setComposerContext] = useState<ComposerContext>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
+  // In-chat search: null when closed. Runs over plaintext already on this
+  // device -- the server could not search ciphertext even if asked.
+  const [search, setSearch] = useState<string | null>(null);
+  const [hit, setHit] = useState(0);
 
   // Direct chat ids are the two uids sorted and joined, so the peer is
   // derivable without a lookup.
@@ -44,6 +54,10 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     editText,
     deleteForEveryone,
     deleteForMe,
+    react,
+    starredIds,
+    toggleStar,
+    forward,
     retry,
     discard,
     notice,
@@ -53,6 +67,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     peerReadAt,
     peerDeliveredAt,
   } = useThread(chatId, peerUid);
+
+  // Counted from the newest, like WhatsApp: hit 0 is the latest match.
+  const matches = useMemo(() => (search ? findMatches(messages, search) : []), [messages, search]);
 
   const scroller = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -156,9 +173,43 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   function jumpTo(id: string) {
     const node = document.getElementById(`m-${id}`);
     if (!node) return;
+    atBottom.current = false;
     node.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlighted(id);
     setTimeout(() => setHighlighted((current) => (current === id ? null : current)), 1200);
+  }
+
+  // Arriving from the Starred screen: /chats/{id}#m-{messageId}. Once, as
+  // soon as that message is on screen; one older than the loaded pages just
+  // opens the chat.
+  const arrivedAt = useRef<string | null>(null);
+  useEffect(() => {
+    const target = window.location.hash.startsWith('#m-') ? window.location.hash.slice(3) : null;
+    if (!target || arrivedAt.current === target || !messages.some((message) => message.id === target)) {
+      return;
+    }
+    arrivedAt.current = target;
+    requestAnimationFrame(() => jumpTo(target));
+  }, [messages]);
+
+  /**
+   * Step to a search hit (0 is the newest) and bring it into view. Done here,
+   * where the step happens, so new messages arriving mid-search never move
+   * the view on their own.
+   */
+  function goToHit(next: number, found = matches) {
+    if (!found.length) {
+      setHit(0);
+      return;
+    }
+    const index = (next + found.length) % found.length;
+    setHit(index);
+    jumpTo(found[found.length - 1 - index]);
+  }
+
+  function closeSearch() {
+    setSearch(null);
+    setHit(0);
   }
 
   function handleSend(text: string) {
@@ -175,6 +226,63 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
   return (
     <div className="flex h-dvh flex-col bg-void">
+      {search !== null ? (
+        <header className="flex items-center gap-1 border-b border-line bg-surface px-2 pt-safe">
+          <button
+            onClick={closeSearch}
+            aria-label="Close search"
+            className="grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <input
+            autoFocus
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              goToHit(0, findMatches(messages, event.target.value));
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') closeSearch();
+              // Enter steps to the next (older) hit, Shift+Enter back.
+              if (event.key === 'Enter' && matches.length) {
+                event.preventDefault();
+                goToHit(hit + (event.shiftKey ? -1 : 1));
+              }
+            }}
+            placeholder="Search this chat"
+            aria-label="Search this chat"
+            className="h-14 min-w-0 flex-1 bg-transparent px-1 text-[16px] text-ink placeholder:text-faint focus:outline-none"
+          />
+          {search.trim() && (
+            <span className="shrink-0 text-[13px] text-muted tabular-nums" aria-live="polite">
+              {matches.length ? `${Math.min(hit, matches.length - 1) + 1} of ${matches.length}` : 'No results'}
+            </span>
+          )}
+          <button
+            onClick={() => goToHit(hit + 1)}
+            disabled={matches.length < 2}
+            aria-label="Older match"
+            className="grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated disabled:opacity-40"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={() => goToHit(hit - 1)}
+            disabled={matches.length < 2}
+            aria-label="Newer match"
+            className="grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated disabled:opacity-40"
+          >
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </header>
+      ) : (
       <header className="flex items-center gap-3 border-b border-line bg-surface px-2 pt-safe">
         <Link
           href="/chats"
@@ -218,7 +326,28 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             </p>
           </div>
         </button>
+
+        <button
+          onClick={() => setSearch('')}
+          aria-label="Search this chat"
+          className="mr-1 grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink"
+        >
+          <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.9" />
+            <path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          </svg>
+        </button>
       </header>
+      )}
+
+      {search !== null && search.trim() && !exhausted && (
+        <div className="flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-1.5 text-[12px] text-faint">
+          <span>Searching the messages loaded on this device.</span>
+          <button onClick={() => void loadOlder()} className="shrink-0 font-medium text-zing">
+            Load older
+          </button>
+        </div>
+      )}
 
       {keyChanged && peer && acceptedKey !== peer.publicKey && (
         <div className="flex items-start gap-3 border-b border-line bg-surface px-4 py-3">
@@ -295,9 +424,16 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
                     tailed={!next || next.senderId !== message.senderId}
                     quote={quoteFor(message)}
                     highlighted={highlighted === message.id}
+                    reactions={summarizeReactions(message.reactions, user?.uid)}
+                    starred={starredIds.has(message.id)}
+                    search={search ?? ''}
                     onReply={() => replyTo(message)}
                     onMenu={() => setMenuFor(message)}
                     onQuoteClick={() => message.replyTo && jumpTo(message.replyTo)}
+                    onReactionClick={() => {
+                      if (user && message.reactions?.[user.uid]) react(message.id, null);
+                      else setMenuFor(message);
+                    }}
                     onRetry={() => retry(message.id)}
                     onDiscard={() => discard(message.id)}
                     tick={tickState({
@@ -356,6 +492,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         <MessageMenu
           message={menuFor}
           mine={menuFor.senderId === user?.uid}
+          myReaction={(user && menuFor.reactions?.[user.uid]) || null}
+          starred={starredIds.has(menuFor.id)}
+          canReact={conversationKey !== null && !peerDeleted}
           onReply={() => replyTo(menuFor)}
           onEdit={() =>
             menuFor.text !== null &&
@@ -363,7 +502,26 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           }
           onDelete={() => deleteForEveryone(menuFor.id)}
           onDeleteForMe={() => deleteForMe(menuFor.id)}
+          onReact={(emoji) => react(menuFor.id, emoji)}
+          onStar={(on) => toggleStar(menuFor.id, on)}
+          onForward={() => setForwarding(menuFor)}
           onClose={() => setMenuFor(null)}
+        />
+      )}
+
+      {forwarding?.text && user && (
+        <ForwardSheet
+          me={user.uid}
+          preview={forwarding.text}
+          onClose={() => setForwarding(null)}
+          onPick={async (target) => {
+            const ok = await forward(forwarding.text!, target);
+            if (ok) {
+              setForwarding(null);
+              if (target !== chatId) router.push(`/chats/${target}`);
+            }
+            return ok;
+          }}
         />
       )}
 

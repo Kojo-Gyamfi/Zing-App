@@ -4,12 +4,33 @@ import { useRef } from 'react';
 import { motion, useMotionValue, useTransform } from 'motion/react';
 import { bubbleTime } from '@/lib/format';
 import { DELETED_LABEL } from '@/lib/db/messages';
+import { splitMatches } from '@/lib/search';
+import type { ReactionChip } from '@/lib/reactions';
 import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
 
 /** How far a bubble must be dragged right before letting go counts as "reply". */
 const SWIPE_TO_REPLY = 56;
 const LONG_PRESS_MS = 450;
+
+/** WhatsApp's marker for a message that was forwarded rather than typed. */
+export function ForwardedLabel() {
+  return (
+    <span className="mb-0.5 flex items-center gap-1 text-[12px] text-muted italic">
+      <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden="true">
+        <path
+          d="M14 8l5 4-5 4M19 12h-9a5 5 0 0 0-5 5v1"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      Forwarded
+    </span>
+  );
+}
 
 export type Quote = {
   author: string;
@@ -25,9 +46,13 @@ export function MessageBubble({
   tailed,
   quote,
   highlighted,
+  reactions = [],
+  starred = false,
+  search = '',
   onReply,
   onMenu,
   onQuoteClick,
+  onReactionClick,
   onRetry,
   onDiscard,
 }: {
@@ -38,11 +63,17 @@ export function MessageBubble({
   tailed: boolean;
   /** The message this one replies to, resolved from what is loaded locally. */
   quote?: Quote | null;
-  /** Briefly true after jumping here from a quote. */
+  /** Briefly true after jumping here from a quote or a search hit. */
   highlighted?: boolean;
+  reactions?: ReactionChip[];
+  starred?: boolean;
+  /** The in-chat search query; matches in the text are marked. */
+  search?: string;
   onReply?: () => void;
   onMenu?: () => void;
   onQuoteClick?: () => void;
+  /** Tapping the reaction chips: takes mine back, if I reacted. */
+  onReactionClick?: () => void;
   /** Only used for failed messages. */
   onRetry?: () => void;
   onDiscard?: () => void;
@@ -66,6 +97,7 @@ export function MessageBubble({
   // message, so a "deleted" placeholder can still be deleted for me.
   const interactive = !message.failed && !message.deleted;
   const hasMenu = !message.failed;
+  const showReactions = reactions.length > 0 && !message.deleted;
 
   return (
     <motion.div
@@ -76,7 +108,8 @@ export function MessageBubble({
       transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
       className={`relative flex w-full rounded-xl transition-colors duration-700
         ${mine ? 'justify-end' : 'justify-start'}
-        ${highlighted ? 'bg-zing/15' : ''}`}
+        ${highlighted ? 'bg-zing/15' : ''}
+        ${showReactions ? 'mb-4' : ''}`}
     >
       <motion.div
         drag={interactive ? 'x' : false}
@@ -114,7 +147,7 @@ export function MessageBubble({
         }}
         // pan-y keeps vertical scrolling native while the bubble owns
         // horizontal drags; no-callout stops iOS's own long-press menu.
-        className={`relative max-w-[78%] touch-pan-y px-3 py-2 text-[15px] leading-snug
+        className={`group relative max-w-[78%] touch-pan-y px-3 py-2 text-[15px] leading-snug
           select-none [-webkit-touch-callout:none] md:select-text
           ${mine ? 'bg-bubble-out text-ink' : 'bg-bubble-in text-ink'}
           ${
@@ -143,6 +176,8 @@ export function MessageBubble({
             </svg>
           </motion.span>
         )}
+
+        {message.forwarded && <ForwardedLabel />}
 
         {quote && (
           <button
@@ -185,7 +220,19 @@ export function MessageBubble({
             Can&apos;t be decrypted on this device
           </span>
         ) : (
-          <span className="break-words whitespace-pre-wrap">{message.text}</span>
+          <span className="break-words whitespace-pre-wrap">
+            {search
+              ? splitMatches(message.text, search).map((run, index) =>
+                  run.match ? (
+                    <mark key={index} className="rounded-sm bg-zing/40 text-ink">
+                      {run.text}
+                    </mark>
+                  ) : (
+                    run.text
+                  ),
+                )
+              : message.text}
+          </span>
         )}
 
         {message.failed ? (
@@ -200,10 +247,63 @@ export function MessageBubble({
           </span>
         ) : (
           <span className="mt-0.5 flex items-center justify-end gap-1 text-[11px] text-muted">
+            {starred && (
+              <svg viewBox="0 0 24 24" className="size-3" role="img" aria-label="Starred">
+                <path
+                  d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
+                  fill="currentColor"
+                />
+              </svg>
+            )}
             {message.edited && <span>Edited</span>}
             {bubbleTime(message.createdAt)}
             {mine && !message.deleted && <Ticks state={tick} />}
           </span>
+        )}
+
+        {/* Desktop: right-click is not discoverable, so hovering a bubble shows
+            an arrow that opens the same menu, as on WhatsApp Web. Touch keeps
+            long-press -- there is no hover to reveal it. */}
+        {hasMenu && (
+          <button
+            type="button"
+            onClick={onMenu}
+            onPointerDown={(event) => event.stopPropagation()}
+            aria-label="Message options"
+            // A fade in the bubble's own colour, so the text it sits over
+            // melts away under the arrow instead of showing through it.
+            className={`absolute top-0.5 right-0.5 hidden h-7 w-11 items-center justify-end rounded-tr-2xl
+              bg-linear-to-l from-55% to-transparent pr-1.5 text-muted opacity-0 transition-opacity
+              group-hover:opacity-100 hover:text-ink focus-visible:opacity-100 md:flex
+              ${mine ? 'from-bubble-out' : 'from-bubble-in'}`}
+          >
+            <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
+        {/* Hangs off the bottom edge, WhatsApp style. */}
+        {showReactions && (
+          <button
+            type="button"
+            onClick={onReactionClick}
+            aria-label={`Reactions: ${reactions
+              .map((chip) => `${chip.emoji} ${chip.count}${chip.mine ? ', including yours' : ''}`)
+              .join('; ')}`}
+            className={`absolute -bottom-4 flex h-6 items-center gap-0.5 rounded-full border border-void
+              bg-elevated px-1.5 text-[13px] leading-none shadow-sm shadow-black/40
+              ${mine ? 'right-2' : 'left-2'}`}
+          >
+            {reactions.map((chip) => (
+              <span key={chip.emoji}>{chip.emoji}</span>
+            ))}
+            {reactions.reduce((total, chip) => total + chip.count, 0) > 1 && (
+              <span className="ml-0.5 text-[11px] text-muted">
+                {reactions.reduce((total, chip) => total + chip.count, 0)}
+              </span>
+            )}
+          </button>
         )}
       </motion.div>
     </motion.div>
