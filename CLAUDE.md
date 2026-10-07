@@ -136,6 +136,17 @@ rather than letting every decryption fail mysteriously.
   no messages, edits, reactions, preview, bump or badge. Deleting for everyone still works. The block
   also hides the blocker's shared docs from the person blocked. `private/account.blocked` mirrors
   the list for Settings, written in the same batch.
+- **Disappearing messages are cleaned up by clients** (TTL policies need billing, so they aren't on
+  Spark). The timer is `disappearing` on the chat doc. Each message carries `expiresAt` from the
+  sender's clock, and so does its preview. Every device hides expired messages. Any member may then
+  **hard-delete** one: the only real message delete the rules allow, and only after `expiresAt`.
+  Either member may also strip an expired preview's ciphertext. Each sender's device sweeps its own
+  expired messages once a session (`sweepExpiredMessages`, a collection-group query with its own
+  index and list rule).
+- **Drafts live in localStorage only** (`lib/store/drafts.ts`), are never synced, and are wiped on
+  sign-out.
+- **Link previews never fetch anything.** The card is built from the URL in the decrypted text
+  (`lib/links.ts`). Fetching the page would need a server that learns every link sent.
 - **Forwarding re-seals plaintext under the target chat's key**; nothing links the two conversations.
   The copy carries `forwarded: true` for the label — metadata like `replyTo`, set only at send time.
 - **The open thread takes its receipts from the chat list's listener** (`lib/store/chats.ts`) rather

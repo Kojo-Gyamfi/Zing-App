@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
@@ -20,6 +20,9 @@ import { clearChatNotifications } from '@/lib/push';
 import { acceptPeerKey, peerKeyChanged } from '@/lib/keyWatch';
 import { findMatches } from '@/lib/search';
 import { summarizeReactions } from '@/lib/reactions';
+import { draftFor, useDrafts } from '@/lib/store/drafts';
+import { MessageInfoSheet } from '@/components/chat/MessageInfoSheet';
+import { DisappearingIcon, disappearingLabel } from '@/components/chat/Disappearing';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
@@ -28,6 +31,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const [infoOpen, setInfoOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<DecryptedMessage | null>(null);
   const [forwarding, setForwarding] = useState<DecryptedMessage | null>(null);
+  const [infoFor, setInfoFor] = useState<DecryptedMessage | null>(null);
   const [composerContext, setComposerContext] = useState<ComposerContext>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   // In-chat search: null when closed. Runs over plaintext already on this
@@ -49,6 +53,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     blockedByMe,
     blockedByPeer,
     setBlock,
+    disappearing,
+    setDisappearing,
     presence,
     peerTyping,
     loading,
@@ -70,6 +76,18 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     peerReadAt,
     peerDeliveredAt,
   } = useThread(chatId, peerUid);
+
+  // Unsent text survives leaving the chat, on this device only.
+  const uid = user?.uid;
+  const saveDraft = useDrafts((state) => state.set);
+  // Read when the chat changes; the composer only takes it as it mounts.
+  const initialDraft = useMemo(() => (uid ? draftFor(uid, chatId) : ''), [uid, chatId]);
+  const onDraftChange = useCallback(
+    (text: string) => {
+      if (uid) saveDraft(uid, chatId, text);
+    },
+    [uid, chatId, saveDraft],
+  );
 
   // Counted from the newest, like WhatsApp: hit 0 is the latest match.
   const matches = useMemo(() => (search ? findMatches(messages, search) : []), [messages, search]);
@@ -316,7 +334,12 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             online={presence.online}
           />
           <div className="min-w-0">
-            <p className="truncate font-semibold">{peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Loading')}</p>
+            <p className="flex items-center gap-1.5 truncate font-semibold">
+              <span className="truncate">{peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Loading')}</span>
+              {disappearing > 0 && (
+                <DisappearingIcon className="size-3.5 shrink-0 text-muted" label={disappearingLabel(disappearing)} />
+              )}
+            </p>
             <p className="flex items-center gap-1.5 truncate text-[12px] text-muted">
               {peerTyping ? (
                 <>
@@ -377,6 +400,16 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             </button>
           </div>
         </div>
+      )}
+
+      {disappearing > 0 && (
+        <button
+          onClick={() => setInfoOpen(true)}
+          className="flex items-center justify-center gap-1.5 border-b border-line bg-surface px-4 py-1.5 text-[12px] text-muted"
+        >
+          <DisappearingIcon className="size-3.5 shrink-0" />
+          New messages disappear {disappearingLabel(disappearing)} after they&apos;re sent.
+        </button>
       )}
 
       <div
@@ -494,6 +527,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         </div>
       ) : (
         <Composer
+          key={chatId}
+          draft={initialDraft}
+          onDraftChange={onDraftChange}
           onSend={handleSend}
           onTyping={ping}
           disabled={peerDeleted || blockedByPeer || !conversationKey}
@@ -526,7 +562,18 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           onReact={(emoji) => react(menuFor.id, emoji)}
           onStar={(on) => toggleStar(menuFor.id, on)}
           onForward={() => setForwarding(menuFor)}
+          onInfo={() => setInfoFor(menuFor)}
           onClose={() => setMenuFor(null)}
+        />
+      )}
+
+      {infoFor && (
+        <MessageInfoSheet
+          message={infoFor}
+          peerName={peer?.displayName ?? 'They'}
+          peerDeliveredAt={peerDeliveredAt}
+          peerReadAt={peerReadAt}
+          onClose={() => setInfoFor(null)}
         />
       )}
 
@@ -552,6 +599,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           presence={presence}
           blocked={blockedByMe}
           onBlock={setBlock}
+          disappearing={disappearing}
+          // Can't change it across a block: the rules keep the chat frozen.
+          onDisappearing={blockedByMe || blockedByPeer ? undefined : setDisappearing}
           onClose={() => setInfoOpen(false)}
         />
       )}

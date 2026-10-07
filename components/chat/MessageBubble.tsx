@@ -1,10 +1,11 @@
 'use client';
 
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { motion, useMotionValue, useTransform } from 'motion/react';
 import { bubbleTime } from '@/lib/format';
 import { DELETED_LABEL } from '@/lib/db/messages';
 import { splitMatches } from '@/lib/search';
+import { firstLinkCard, splitLinks, type LinkCard } from '@/lib/links';
 import type { ReactionChip } from '@/lib/reactions';
 import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
@@ -29,6 +30,48 @@ export function ForwardedLabel() {
       </svg>
       Forwarded
     </span>
+  );
+}
+
+const CARD_ICONS: Record<LinkCard['kind'], string> = {
+  video: 'M4 6h16v12H4zM10 9.5v5l4.5-2.5z',
+  code: 'M9 8l-4 4 4 4M15 8l4 4-4 4',
+  map: 'M12 21s-6-5.6-6-10a6 6 0 0 1 12 0c0 4.4-6 10-6 10zM12 13a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+};
+
+/**
+ * The card under a message's first link, made from the URL alone -- no
+ * request to the site, from either phone (see lib/links.ts). The host is the
+ * real one, so a link whose text pretends to be somewhere else is caught out.
+ */
+function LinkPreview({ card }: { card: LinkCard }) {
+  return (
+    <a
+      href={card.href}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      referrerPolicy="no-referrer"
+      onPointerDown={(event) => event.stopPropagation()}
+      className="mt-1.5 flex items-center gap-2.5 rounded-lg bg-black/20 px-2.5 py-2 text-left"
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-black/25 text-muted">
+        <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
+          <path
+            d={CARD_ICONS[card.kind]}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[13px] font-medium text-ink">{card.title}</span>
+        <span className="block truncate text-[12px] text-muted">{card.host}</span>
+      </span>
+    </a>
   );
 }
 
@@ -98,6 +141,7 @@ export function MessageBubble({
   const interactive = !message.failed && !message.deleted;
   const hasMenu = !message.failed;
   const showReactions = reactions.length > 0 && !message.deleted;
+  const card = useMemo(() => (message.text ? firstLinkCard(message.text) : null), [message.text]);
 
   return (
     <motion.div
@@ -220,19 +264,39 @@ export function MessageBubble({
             Can&apos;t be decrypted on this device
           </span>
         ) : (
-          <span className="break-words whitespace-pre-wrap">
-            {search
-              ? splitMatches(message.text, search).map((run, index) =>
-                  run.match ? (
-                    <mark key={index} className="rounded-sm bg-zing/40 text-ink">
-                      {run.text}
-                    </mark>
-                  ) : (
-                    run.text
-                  ),
-                )
-              : message.text}
-          </span>
+          <>
+            <span className="break-words whitespace-pre-wrap">
+              {search
+                ? splitMatches(message.text, search).map((run, index) =>
+                    run.match ? (
+                      <mark key={index} className="rounded-sm bg-zing/40 text-ink">
+                        {run.text}
+                      </mark>
+                    ) : (
+                      run.text
+                    ),
+                  )
+                : splitLinks(message.text).map((run, index) =>
+                    run.href ? (
+                      <a
+                        key={index}
+                        href={run.href}
+                        target="_blank"
+                        rel="noopener noreferrer nofollow"
+                        referrerPolicy="no-referrer"
+                        // A tap on a link is not the start of a long-press.
+                        onPointerDown={(event) => event.stopPropagation()}
+                        className="break-all text-zing-soft underline underline-offset-2"
+                      >
+                        {run.text}
+                      </a>
+                    ) : (
+                      run.text
+                    ),
+                  )}
+            </span>
+            {card && <LinkPreview card={card} />}
+          </>
         )}
 
         {message.failed ? (

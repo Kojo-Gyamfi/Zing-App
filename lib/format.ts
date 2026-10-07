@@ -34,6 +34,11 @@ export function bubbleTime(date: Date | null): string {
   return clockTime(date);
 }
 
+/** A day and a time, for Message info: "Today at 3:05 PM", "4 October 2026 at 9:12 AM". */
+export function dayAndTime(date: Date): string {
+  return `${dayLabel(date)} at ${clockTime(date)}`;
+}
+
 /** Day divider inside a thread. */
 export function dayLabel(date: Date): string {
   const now = new Date();

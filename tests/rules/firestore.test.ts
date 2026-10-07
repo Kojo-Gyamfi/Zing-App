@@ -24,6 +24,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   where,
   writeBatch,
@@ -583,6 +584,116 @@ describe('profile photo for contacts only', () => {
 
     await updateDoc(doc(as('bob'), 'chats', CHAT), { 'blocked.bob': true });
     await assertFails(read('alice'));
+  });
+});
+
+describe('disappearing messages', () => {
+  const DAY = 86_400_000;
+  const message = (expiresAt: unknown) => ({
+    senderId: 'alice',
+    ciphertext: 'abc',
+    nonce: 'n',
+    type: 'text',
+    createdAt: serverTimestamp(),
+    replyTo: null,
+    expiresAt,
+  });
+
+  /** A message from Bob, and a preview of it, whose time ran out a minute ago. */
+  async function seedExpired() {
+    const past = Timestamp.fromMillis(Date.now() - 60_000);
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore() as unknown as Firestore;
+      await setDoc(doc(db, 'chats', CHAT, 'messages', 'gone'), {
+        senderId: 'bob',
+        ciphertext: 'x',
+        nonce: 'y',
+        type: 'text',
+        createdAt: new Date(Date.now() - DAY),
+        replyTo: null,
+        expiresAt: past,
+      });
+      await updateDoc(doc(db, 'chats', CHAT), {
+        lastMessage: { id: 'gone', senderId: 'bob', ciphertext: 'x', nonce: 'y', expiresAt: past },
+      });
+    });
+    return past;
+  }
+
+  it('lets either member set the timer, to the offered values only', async () => {
+    await assertSucceeds(updateDoc(doc(as('alice'), 'chats', CHAT), { disappearing: 86_400 }));
+    await assertSucceeds(updateDoc(doc(as('bob'), 'chats', CHAT), { disappearing: 0 }));
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { disappearing: 60 }));
+    await assertFails(updateDoc(doc(as('carol'), 'chats', CHAT), { disappearing: 86_400 }));
+  });
+
+  it('accepts an expiry ahead of now and within 90 days', async () => {
+    const at = (ms: number) => Timestamp.fromMillis(Date.now() + ms);
+    const ref = (id: string) => doc(as('alice'), 'chats', CHAT, 'messages', id);
+    await assertSucceeds(setDoc(ref('a'), message(at(DAY))));
+    await assertSucceeds(setDoc(ref('b'), message(at(90 * DAY))));
+    await assertFails(setDoc(ref('c'), message(at(-DAY))));
+    await assertFails(setDoc(ref('d'), message(at(200 * DAY))));
+    await assertFails(setDoc(ref('e'), message('tomorrow')));
+  });
+
+  it('deletes an expired message outright, by either member, and nothing else', async () => {
+    await seedExpired();
+    await assertFails(deleteDoc(doc(as('carol'), 'chats', CHAT, 'messages', 'gone')));
+    await assertSucceeds(deleteDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'gone')));
+    // An ordinary message, and one still in its time, stay tombstone-only.
+    await assertFails(deleteDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'm1')));
+    await setDoc(
+      doc(as('alice'), 'chats', CHAT, 'messages', 'live'),
+      message(Timestamp.fromMillis(Date.now() + DAY)),
+    );
+    await assertFails(deleteDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'live')));
+  });
+
+  it("strips an expired preview's ciphertext, by either member, and nothing more", async () => {
+    const past = await seedExpired();
+    const chat = doc(as('alice'), 'chats', CHAT);
+    // Pushing the expiry back, or slipping in other ciphertext, is refused.
+    await assertFails(
+      updateDoc(chat, {
+        lastMessage: { id: 'gone', senderId: 'bob', expiresAt: Timestamp.fromMillis(Date.now() + DAY) },
+      }),
+    );
+    await assertFails(
+      updateDoc(chat, {
+        lastMessage: { id: 'gone', senderId: 'bob', expiresAt: past, ciphertext: 'forged', nonce: 'n' },
+      }),
+    );
+    await assertSucceeds(
+      updateDoc(chat, { lastMessage: { id: 'gone', senderId: 'bob', expiresAt: past } }),
+    );
+  });
+
+  it("keeps a preview that hasn't expired out of the other member's hands", async () => {
+    const future = Timestamp.fromMillis(Date.now() + DAY);
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore() as unknown as Firestore;
+      await updateDoc(doc(db, 'chats', CHAT), {
+        lastMessage: { id: 'm', senderId: 'bob', ciphertext: 'x', nonce: 'y', expiresAt: future },
+      });
+    });
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'm', senderId: 'bob', expiresAt: future },
+      }),
+    );
+  });
+
+  it("lets a sender sweep their own messages across chats, and nobody else's", async () => {
+    const mine = query(
+      collectionGroup(as('bob'), 'messages'),
+      where('senderId', '==', 'bob'),
+      where('expiresAt', '<=', Timestamp.now()),
+    );
+    await assertSucceeds(getDocs(mine));
+    await assertFails(
+      getDocs(query(collectionGroup(as('alice'), 'messages'), where('senderId', '==', 'bob'))),
+    );
   });
 });
 

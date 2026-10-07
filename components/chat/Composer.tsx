@@ -17,6 +17,8 @@ export function Composer({
   disabledText,
   context = null,
   onCancelContext,
+  draft = '',
+  onDraftChange,
 }: {
   onSend: (text: string) => void | Promise<void>;
   onTyping: () => void;
@@ -25,8 +27,14 @@ export function Composer({
   disabledText?: string;
   context?: ComposerContext;
   onCancelContext?: () => void;
+  /** Unsent text from last time. Read once, when the composer mounts. */
+  draft?: string;
+  /** Every change to the unsent text -- not while editing a sent message. */
+  onDraftChange?: (text: string) => void;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(draft);
+  // What was being typed before an edit took over the box, put back after.
+  const [kept, setKept] = useState(draft);
   const box = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   // Where the caret was last. On a phone the box loses focus while the emoji
@@ -43,9 +51,27 @@ export function Composer({
   const [loadedEdit, setLoadedEdit] = useState<string | null>(null);
   if (editId !== loadedEdit) {
     setLoadedEdit(editId);
-    if (context?.kind === 'edit') setText(context.text);
-    else if (loadedEdit) setText('');
+    if (context?.kind === 'edit') {
+      if (!loadedEdit) setKept(text);
+      setText(context.text);
+    } else if (loadedEdit) {
+      setText(kept);
+    }
   }
+
+  // The draft is whatever is in the box while it is not holding an edit.
+  const editing = context?.kind === 'edit';
+  useEffect(() => {
+    if (!editing) onDraftChange?.(text);
+  }, [text, editing, onDraftChange]);
+
+  // A restored draft may run to several lines.
+  useEffect(() => {
+    const node = box.current;
+    if (!node || !node.value) return;
+    node.style.height = 'auto';
+    node.style.height = `${Math.min(node.scrollHeight, 140)}px`;
+  }, []);
 
   // Swiping to reply or choosing Edit should land the cursor in the box.
   const contextId = context?.id ?? null;
@@ -75,8 +101,6 @@ export function Composer({
     requestAnimationFrame(grow);
     void onSend(value);
   }
-
-  const editing = context?.kind === 'edit';
 
   const isTouch = () => 'ontouchstart' in window;
 

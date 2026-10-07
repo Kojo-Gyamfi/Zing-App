@@ -12,9 +12,11 @@ import {
   writeBatch,
   serverTimestamp,
   deleteField,
+  deleteDoc,
   increment,
   setDoc,
   updateDoc,
+  Timestamp,
   arrayUnion,
   arrayRemove,
   documentId,
@@ -26,6 +28,7 @@ import type { Envelope } from '@/lib/crypto/types';
 import {
   MAX_MESSAGE_LENGTH,
   MAX_REACTION_LENGTH,
+  type ChatDoc,
   type MessageDoc,
   type MessageListDoc,
   type DecryptedMessage,
@@ -58,12 +61,20 @@ export async function sendMessage(params: {
   replyTo?: string | null;
   /** Sent with Forward: shows the "Forwarded" label on both sides. */
   forwarded?: boolean;
+  /** The chat's disappearing timer, in seconds; 0 or absent for a lasting message. */
+  disappearAfter?: number;
 }): Promise<{ id: string; envelope: Envelope; committed: Promise<void> }> {
   if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
 
   const messageRef = doc(collection(db(), 'chats', params.chatId, 'messages'));
   const batch = writeBatch(db());
+
+  // This device's clock: there is no "server time plus a day" to write. The
+  // rules only check it lies in the future, within the longest timer.
+  const expiresAt = params.disappearAfter
+    ? Timestamp.fromMillis(Date.now() + params.disappearAfter * 1000)
+    : null;
 
   batch.set(messageRef, {
     senderId: params.senderId,
@@ -72,8 +83,9 @@ export async function sendMessage(params: {
     type: 'text',
     createdAt: serverTimestamp(),
     replyTo: params.replyTo ?? null,
-    // Only when true, so an ordinary message keeps its usual shape.
+    // Only when set, so an ordinary message keeps its usual shape.
     ...(params.forwarded ? { forwarded: true } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
   });
 
   // Chat ids are the two uids sorted and joined, so the recipient needs no lookup.
@@ -85,6 +97,7 @@ export async function sendMessage(params: {
       ciphertext: envelope.ciphertext,
       nonce: envelope.nonce,
       senderId: params.senderId,
+      ...(expiresAt ? { expiresAt } : {}),
     },
     updatedAt: serverTimestamp(),
     // The recipient's unread badge. markRead puts it back to zero.
@@ -120,8 +133,77 @@ async function decrypt(
     pending: entry.metadata.hasPendingWrites,
     reactions: deleted ? {} : await openReactions(data.reactions, conversationKey),
     forwarded: !deleted && data.forwarded === true,
+    expiresAt: data.expiresAt?.toDate() ?? null,
   };
 }
+
+/** A disappearing message whose time is up. Hidden everywhere from that moment. */
+export function hasExpired(message: { expiresAt?: Date | null }, now = Date.now()): boolean {
+  return message.expiresAt != null && message.expiresAt.getTime() <= now;
+}
+
+/**
+ * Delete an expired message outright -- not a tombstone: nothing about it
+ * needs to survive. Any member may, but only once it has expired (the rules
+ * check), so whichever device notices first does the job. Firestore's TTL
+ * policies would do this server-side, but they need billing enabled.
+ */
+export async function removeExpiredMessage(chatId: string, messageId: string): Promise<void> {
+  await deleteDoc(doc(db(), 'chats', chatId, 'messages', messageId));
+}
+
+/**
+ * The sender's sweep: every message this user sent that has expired, across
+ * all chats, deleted. Run once a session from the chat list, so a chat nobody
+ * reopens still loses its expired messages. A page at a time; anything left
+ * goes next session.
+ */
+export async function sweepExpiredMessages(uid: string): Promise<void> {
+  const expired = await getDocs(
+    query(
+      collectionGroup(db(), 'messages'),
+      where('senderId', '==', uid),
+      where('expiresAt', '<=', Timestamp.now()),
+      limit(200),
+    ),
+  );
+  // One batch per chat: each delete's rule reads its chat doc, and a batch
+  // spanning many chats would run past the rules' cap on document reads.
+  const byChat = new Map<string, QueryDocumentSnapshot[]>();
+  for (const entry of expired.docs) {
+    const chatId = entry.ref.parent.parent!.id;
+    byChat.set(chatId, [...(byChat.get(chatId) ?? []), entry]);
+  }
+  await Promise.allSettled(
+    [...byChat.values()].map((entries) => {
+      const batch = writeBatch(db());
+      entries.forEach((entry) => batch.delete(entry.ref));
+      return batch.commit();
+    }),
+  );
+}
+
+/**
+ * Strip the list preview of a disappearing message that has expired. Any
+ * member may (the rules check it has expired and that only the ciphertext
+ * goes), so it is gone from the chat doc even if the sender never comes back.
+ */
+export async function clearExpiredPreview(
+  chatId: string,
+  lastMessage: NonNullable<ChatDoc['lastMessage']>,
+): Promise<void> {
+  if (!lastMessage.expiresAt) return;
+  await updateDoc(doc(db(), 'chats', chatId), {
+    lastMessage: {
+      ...(lastMessage.id ? { id: lastMessage.id } : {}),
+      senderId: lastMessage.senderId,
+      expiresAt: lastMessage.expiresAt,
+    },
+  });
+}
+
+/** What the list shows for a disappearing message once it has gone. */
+export const EXPIRED_LABEL = 'Message disappeared';
 
 async function openReactions(
   sealed: MessageDoc['reactions'],
@@ -334,6 +416,7 @@ export async function loadStarredMessages(
 
   return perChat
     .flat()
+    .filter((message) => !hasExpired(message))
     .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
 }
 
@@ -373,7 +456,10 @@ export async function latestVisibleMessage(
   const snapshot = await getDocs(
     query(collection(db(), 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE)),
   );
-  const entry = snapshot.docs.find((candidate) => !hidden.has(candidate.id));
+  const entry = snapshot.docs.find((candidate) => {
+    const expiresAt = (candidate.data().expiresAt as Timestamp | undefined)?.toDate();
+    return !hidden.has(candidate.id) && !hasExpired({ expiresAt });
+  });
   return entry ? decrypt(entry, conversationKey) : null;
 }
 
@@ -427,9 +513,10 @@ export async function loadOlderMessages(
 
 /** Decrypt a chat-list preview. */
 export async function decryptPreview(
-  lastMessage: { ciphertext?: string; nonce?: string; deleted?: boolean } | null,
+  lastMessage: ChatDoc['lastMessage'],
   conversationKey: Uint8Array | null,
 ): Promise<string | null> {
+  if (lastMessage?.expiresAt && lastMessage.expiresAt.toMillis() <= Date.now()) return EXPIRED_LABEL;
   if (lastMessage?.deleted) return DELETED_LABEL;
   if (!lastMessage?.ciphertext || !lastMessage.nonce || !conversationKey) return null;
   return open({ ciphertext: lastMessage.ciphertext, nonce: lastMessage.nonce }, conversationKey);

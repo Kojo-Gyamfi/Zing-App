@@ -9,6 +9,7 @@ import { fromB64 } from '@/lib/crypto/codec';
 import { safetyNumber } from '@/lib/crypto/safetyNumber';
 import { lastSeenLabel } from '@/lib/format';
 import { shareProfile } from '@/lib/share';
+import { DisappearingIcon, DisappearingPicker } from './Disappearing';
 import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -18,6 +19,8 @@ export function ChatInfoSheet({
   presence,
   blocked,
   onBlock,
+  disappearing,
+  onDisappearing,
   onClose,
 }: {
   peer: UserDoc;
@@ -25,6 +28,10 @@ export function ChatInfoSheet({
   /** I have blocked them. */
   blocked: boolean;
   onBlock: (on: boolean) => void;
+  /** The chat's disappearing-messages timer, in seconds. */
+  disappearing: number;
+  /** Absent when it cannot be changed right now (a blocked chat). */
+  onDisappearing?: (seconds: number) => void;
   onClose: () => void;
 }) {
   const joined = peer.createdAt?.toDate?.();
@@ -67,8 +74,8 @@ export function ChatInfoSheet({
         role="dialog"
         aria-label={`${peer.displayName}'s profile`}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-md space-y-5 rounded-t-3xl border-t border-line bg-surface
-          p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
+        className="max-h-[92dvh] w-full max-w-md space-y-5 overflow-y-auto rounded-t-3xl border-t border-line
+          bg-surface p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] scroll-thin md:rounded-3xl md:border"
       >
         <div className="flex flex-col items-center gap-3 text-center">
           <Avatar
@@ -120,6 +127,20 @@ export function ChatInfoSheet({
             </div>
           )}
         </dl>
+
+        <div className="space-y-2.5 rounded-2xl border border-line bg-void px-4 py-3">
+          <div>
+            <p className="flex items-center gap-1.5 text-[14px] text-ink">
+              <DisappearingIcon className="size-4 text-muted" />
+              Disappearing messages
+            </p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-muted">
+              New messages vanish for both of you this long after they&apos;re sent. Either of you
+              can change it. Messages already sent keep their own timer.
+            </p>
+          </div>
+          <DisappearingPicker value={disappearing} onChange={onDisappearing} />
+        </div>
 
         <p className="flex items-center justify-center gap-1.5 text-[12px] text-faint">
           <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">

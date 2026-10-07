@@ -6,7 +6,14 @@ import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
 import { useChats } from '@/lib/store/chats';
 import { subscribeChats, markDelivered, CHAT_PAGE_SIZE, type ChatSummary } from '@/lib/db/chats';
-import { decryptPreview, latestVisibleMessage, subscribeAllHidden, DELETED_LABEL } from '@/lib/db/messages';
+import {
+  clearExpiredPreview,
+  decryptPreview,
+  latestVisibleMessage,
+  subscribeAllHidden,
+  sweepExpiredMessages,
+  DELETED_LABEL,
+} from '@/lib/db/messages';
 import { isUnread, needsDeliveryReceipt } from '@/lib/receipts';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -99,6 +106,19 @@ export function useChatList() {
     return subscribeAllHidden(uid, setHidden);
   }, [uid]);
 
+  // My own expired disappearing messages, wherever they are, once a session.
+  // With no TTL on the free plan this is what clears chats nobody reopens.
+  const swept = useRef<string | null>(null);
+  useEffect(() => {
+    if (!uid || swept.current === uid) return;
+    swept.current = uid;
+    void sweepExpiredMessages(uid).catch(() => undefined);
+  }, [uid]);
+
+  // Expired previews whose ciphertext is still on the chat doc, already
+  // asked to be stripped this session.
+  const clearedPreviews = useRef(new Set<string>());
+
   useEffect(() => {
     if (!uid || !identity || !chats) return;
     const current = ++build.current;
@@ -139,6 +159,20 @@ export function useChatList() {
             // Let the next snapshot try again.
             acknowledged.current.delete(chat.id);
           });
+        }
+
+        // A disappearing preview past its time loses its ciphertext. Either
+        // member may do it; once per message per session.
+        const last = chat.lastMessage;
+        if (
+          last?.ciphertext &&
+          last.expiresAt &&
+          last.expiresAt.toMillis() <= Date.now() &&
+          !chat.pending &&
+          !clearedPreviews.current.has(`${chat.id}:${last.id}`)
+        ) {
+          clearedPreviews.current.add(`${chat.id}:${last.id}`);
+          void clearExpiredPreview(chat.id, last).catch(() => undefined);
         }
 
         const count = chat.unread?.[uid];

@@ -12,6 +12,7 @@ import { disablePush } from '@/lib/push';
 import { setAppBadge } from '@/lib/badge';
 import { useKeys } from '@/lib/store/keys';
 import { watchAccount } from '@/lib/store/account';
+import { clearDrafts } from '@/lib/store/drafts';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -199,8 +200,10 @@ export const useSession = create<SessionState>((set, get) => ({
       ]);
     }
     endPresence();
-    // The next person on this phone should not inherit the unread count.
+    // The next person on this phone should not inherit the unread count, or
+    // read half-typed messages.
     setAppBadge(0);
+    clearDrafts();
     await clearIdentity();
     await firebaseSignOut(auth());
     useKeys.getState().clear();

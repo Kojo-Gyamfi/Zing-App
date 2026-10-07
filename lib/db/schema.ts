@@ -117,7 +117,14 @@ export type ChatDoc = {
     ciphertext?: string;
     nonce?: string;
     deleted?: boolean;
+    /** Copied from a disappearing message; ciphertext is stripped once it passes. */
+    expiresAt?: Timestamp;
   } | null;
+  /**
+   * Disappearing messages: seconds each new message lives, one of
+   * DISAPPEARING_OPTIONS. Absent or 0 is off. Either member may change it.
+   */
+  disappearing?: number;
   updatedAt: Timestamp;
   /** Ticks derive from these two. One write per event, never one per message. */
   lastRead: Record<string, Timestamp>;
@@ -163,7 +170,19 @@ export type MessageDoc = {
    * someone reacted, never with what.
    */
   reactions?: Record<string, { ciphertext: string; nonce: string }>;
+  /**
+   * Disappearing message: hidden by every device once this passes, and then
+   * deleted outright by whichever member's device gets there first (the rules
+   * allow a real delete only after it). Set from the sender's clock.
+   */
+  expiresAt?: Timestamp;
 };
+
+/**
+ * Disappearing-message timers, in seconds: off, 24 hours, 7 days, 90 days.
+ * Mirrored in firestore.rules.
+ */
+export const DISAPPEARING_OPTIONS = [0, 86_400, 604_800, 7_776_000] as const;
 
 /**
  * chats/{chatId}/hidden/{uid} ("Delete for me") and chats/{chatId}/starred/{uid}.
@@ -207,4 +226,6 @@ export type DecryptedMessage = {
   forwarded?: boolean;
   /** The server refused the write. Held in memory only, so it can be retried. */
   failed?: boolean;
+  /** When a disappearing message goes. */
+  expiresAt?: Date | null;
 };

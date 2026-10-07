@@ -11,12 +11,14 @@ import { setChatPref, type ChatPrefs } from '@/lib/db/prefs';
 import { listTime } from '@/lib/format';
 import { setAppBadge } from '@/lib/badge';
 import { useMyPhoto } from '@/lib/store/account';
+import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 import { NotificationPrompt } from '@/components/NotificationPrompt';
 import { ChatRowMenu } from './ChatRowMenu';
 
 const LONG_PRESS_MS = 450;
+const NO_DRAFTS: Record<string, string> = {};
 
 export function ChatListPanel() {
   const { rows, loading, hasMore, loadMore } = useChatList();
@@ -65,6 +67,13 @@ export function ChatListPanel() {
   }, [rows, filter, showArchived, archivedRows, flags]);
 
   const archivedUnread = archivedRows.filter((row) => row.unread).length;
+
+  // Unsent text per chat, from this device only. See lib/store/drafts.ts.
+  const openDrafts = useDrafts((state) => state.open);
+  const drafts = useDrafts((state) => (state.owner === myUid ? state.drafts : NO_DRAFTS));
+  useEffect(() => {
+    if (myUid) openDrafts(myUid);
+  }, [myUid, openDrafts]);
 
   // The installed app's icon badge: unread messages, muted chats left out as
   // they are from notifications. Only the chats loaded so far are counted.
@@ -185,6 +194,7 @@ export function ChatListPanel() {
                 row={row}
                 active={pathname === `/chats/${row.id}`}
                 typing={typing.has(row.id)}
+                draft={drafts[row.id]}
                 pinned={flags.pinned.has(row.id) && !flags.archived.has(row.id)}
                 muted={flags.muted.has(row.id)}
                 onMenu={() => setMenuFor(row)}
@@ -234,6 +244,7 @@ function ChatRow({
   row,
   active,
   typing,
+  draft,
   pinned,
   muted,
   onMenu,
@@ -241,6 +252,8 @@ function ChatRow({
   row: ChatListRow;
   active: boolean;
   typing: boolean;
+  /** Unsent text on this device. */
+  draft?: string;
   pinned: boolean;
   muted: boolean;
   onMenu: () => void;
@@ -308,6 +321,11 @@ function ChatRow({
             <span className={`truncate text-[14px] ${row.unread ? 'text-ink' : 'text-muted'}`}>
               {typing ? (
                 <span className="font-medium text-zing">typing…</span>
+              ) : draft ? (
+                <>
+                  <span className="font-medium text-zing">Draft: </span>
+                  {draft.replace(/\s+/g, ' ')}
+                </>
               ) : row.preview === null ? (
                 row.lastSenderId ? 'Encrypted message' : 'Say hello'
               ) : (

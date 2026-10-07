@@ -16,6 +16,8 @@ import {
   setStarred,
   setReaction,
   loadOlderMessages,
+  hasExpired,
+  removeExpiredMessage,
   PAGE_SIZE,
 } from '@/lib/db/messages';
 import { withReaction } from '@/lib/reactions';
@@ -23,6 +25,7 @@ import {
   clearUnread,
   markRead,
   onConversationKeyReady,
+  setDisappearing,
   subscribeChat,
   type ChatSummary,
 } from '@/lib/db/chats';
@@ -175,6 +178,9 @@ export function useThread(chatId: string, peerUid: string | null) {
   // undefined: not confirmed by the server yet. null: the chat does not exist.
   const confirmed = inList ? listedConfirmed : ownDirect?.confirmed;
 
+  // The disappearing-messages timer, in seconds; 0 is off.
+  const disappearing = latest?.disappearing ?? 0;
+
   // Blocking, either way round. The rules refuse sends while either is set.
   const blockedByMe = Boolean(uid && latest?.blocked?.[uid]);
   const blockedByPeer = Boolean(peerUid && latest?.blocked?.[peerUid]);
@@ -321,6 +327,7 @@ export function useThread(chatId: string, peerUid: string | null) {
         conversationKey,
         replyTo,
         forwarded,
+        disappearAfter: disappearing,
       });
 
       committed.then(
@@ -348,7 +355,7 @@ export function useThread(chatId: string, peerUid: string | null) {
           ]),
       );
     },
-    [chatId, user, conversationKey],
+    [chatId, user, conversationKey, disappearing],
   );
 
   const retry = useCallback(
@@ -487,6 +494,8 @@ export function useThread(chatId: string, peerUid: string | null) {
         text,
         conversationKey: key,
         forwarded: true,
+        // The target chat's own timer, from the list's copy of it.
+        disappearAfter: useChats.getState().chats[target]?.disappearing ?? 0,
       });
       committed.then(
         () => void notifyPeers(target, envelope),
@@ -509,6 +518,15 @@ export function useThread(chatId: string, peerUid: string | null) {
       );
     },
     [chatId, user, peerUid, flash],
+  );
+
+  const setTimer = useCallback(
+    (seconds: number) => {
+      setDisappearing(chatId, seconds).catch(() =>
+        flash('Could not change disappearing messages. Try again.'),
+      );
+    },
+    [chatId, flash],
   );
 
   /** Throttled: one RTDB write every couple of seconds, not one per keystroke. */
@@ -546,6 +564,38 @@ export function useThread(chatId: string, peerUid: string | null) {
     };
   }, [chatId, user]);
 
+  // Disappearing messages leave the screen the moment they expire: a timer
+  // for the next one due (re-armed at least hourly, since setTimeout cannot
+  // wait 90 days), and the first device to notice deletes it for good.
+  const [now, setNow] = useState(() => Date.now());
+  const nextExpiry = useMemo(() => {
+    let next: number | null = null;
+    for (const message of [...older, ...messages]) {
+      const at = message.expiresAt?.getTime();
+      if (at !== undefined && at > now && (next === null || at < next)) next = at;
+    }
+    return next;
+  }, [older, messages, now]);
+  useEffect(() => {
+    if (nextExpiry === null) return;
+    const timer = setTimeout(
+      () => setNow(Date.now()),
+      Math.min(Math.max(nextExpiry - Date.now(), 0) + 50, 60 * 60 * 1000),
+    );
+    return () => clearTimeout(timer);
+  }, [nextExpiry, now]);
+
+  const removing = useRef(new Set<string>());
+  useEffect(() => {
+    for (const message of [...older, ...messages]) {
+      if (message.pending || !hasExpired(message, now) || removing.current.has(message.id)) continue;
+      // Tried once per session: refused only when this clock runs ahead of
+      // the server's, and then the next look will do.
+      removing.current.add(message.id);
+      void removeExpiredMessage(chatId, message.id).catch(() => undefined);
+    }
+  }, [chatId, older, messages, now]);
+
   const hiddenIds = hidden.chatId === chatId ? hidden.ids : null;
   // An older page can overlap the live window at its edge (several messages
   // sharing a timestamp, or the window sliding as new ones arrive), so each
@@ -557,7 +607,9 @@ export function useThread(chatId: string, peerUid: string | null) {
     seen.add(message.id);
     return true;
   });
-  const thread = [...olderOnce, ...messages].filter((message) => !hiddenIds?.has(message.id));
+  const thread = [...olderOnce, ...messages].filter(
+    (message) => !hiddenIds?.has(message.id) && !hasExpired(message, now),
+  );
   const failedHere = failed.filter(
     (entry) => entry.chatId === chatId && !thread.some((message) => message.id === entry.id),
   );
@@ -578,6 +630,9 @@ export function useThread(chatId: string, peerUid: string | null) {
     blockedByMe,
     blockedByPeer,
     setBlock,
+    /** Disappearing-messages timer in seconds, 0 when off. */
+    disappearing,
+    setDisappearing: setTimer,
     presence: showPresence ? presence : NO_PRESENCE,
     peerTyping: peerTyping && !blocked,
     peerReadAt,

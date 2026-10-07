@@ -25,6 +25,7 @@ export function MessageMenu({
   onReact,
   onStar,
   onForward,
+  onInfo,
   onClose,
 }: {
   message: DecryptedMessage;
@@ -42,6 +43,8 @@ export function MessageMenu({
   onReact: (emoji: string | null) => void;
   onStar: (on: boolean) => void;
   onForward: () => void;
+  /** Delivered and read times, for my own messages. */
+  onInfo: () => void;
   onClose: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -196,6 +199,16 @@ export function MessageMenu({
                 icon="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
                 onClick={() => {
                   onStar(!starred);
+                  onClose();
+                }}
+              />
+            )}
+            {mine && !message.deleted && !message.pending && (
+              <Action
+                label="Info"
+                icon="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01"
+                onClick={() => {
+                  onInfo();
                   onClose();
                 }}
               />

@@ -192,6 +192,15 @@ export async function markRead(chatId: string, uid: string): Promise<void> {
 }
 
 /**
+ * The chat's disappearing-messages timer, for both members (either may set
+ * it, as on WhatsApp). Only messages sent afterwards are affected: each one
+ * carries its own expiry from the moment it was sent.
+ */
+export async function setDisappearing(chatId: string, seconds: number): Promise<void> {
+  await updateDoc(doc(db(), 'chats', chatId), { disappearing: seconds });
+}
+
+/**
  * markRead for someone with read receipts turned off: their badge clears, but
  * lastRead -- the other person's blue ticks -- is never written.
  */
