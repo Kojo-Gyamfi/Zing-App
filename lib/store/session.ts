@@ -7,9 +7,11 @@ import { getUser } from '@/lib/db/users';
 import { loadIdentity, clearIdentity } from '@/lib/crypto/vault';
 import { publicKeyFrom } from '@/lib/crypto/identity';
 import { toB64 } from '@/lib/crypto/codec';
-import { trackPresence } from '@/lib/db/presence';
+import { forgetPresence, trackPresence } from '@/lib/db/presence';
 import { disablePush } from '@/lib/push';
+import { setAppBadge } from '@/lib/badge';
 import { useKeys } from '@/lib/store/keys';
+import { watchAccount } from '@/lib/store/account';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -44,15 +46,40 @@ type SessionState = {
 };
 
 /**
- * Presence is tracked for exactly one account at a time. Both ways of reaching
- * `ready` (launch, and unlocking/onboarding) go through here, and so does
- * every way out, so a second tracker never leaks.
+ * The account listener and presence are run for exactly one account at a
+ * time. Both ways of reaching `ready` (launch, and unlocking/onboarding) go
+ * through here, and so does every way out, so a second tracker never leaks.
+ *
+ * Presence follows the "last seen" privacy setting: published while it is
+ * shared, and the node removed outright when it is hidden -- on every device,
+ * since each one watches the same account doc.
  */
 let stopPresence: ((markOffline?: boolean) => void) | null = null;
 
 function startPresence(uid: string) {
   stopPresence?.();
-  stopPresence = trackPresence(uid);
+
+  let tracking: ((markOffline?: boolean) => void) | null = null;
+  let hidden = false;
+  const stopAccount = watchAccount(uid, (settings, known) => {
+    // Unknown (offline, nothing cached): publish nothing until we know.
+    if (!known) return;
+    if (settings.privacy.lastSeen) {
+      hidden = false;
+      tracking ??= trackPresence(uid);
+    } else if (!hidden) {
+      hidden = true;
+      tracking?.(false);
+      tracking = null;
+      void forgetPresence(uid).catch(() => undefined);
+    }
+  });
+
+  stopPresence = (markOffline = true) => {
+    stopAccount();
+    tracking?.(markOffline);
+    tracking = null;
+  };
 }
 
 /**
@@ -172,6 +199,8 @@ export const useSession = create<SessionState>((set, get) => ({
       ]);
     }
     endPresence();
+    // The next person on this phone should not inherit the unread count.
+    setAppBadge(0);
     await clearIdentity();
     await firebaseSignOut(auth());
     useKeys.getState().clear();

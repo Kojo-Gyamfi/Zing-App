@@ -51,7 +51,8 @@ async function confirmIdentity(user: User): Promise<void> {
  *
  * Removed: the profile and with it the public key and passphrase backup, the
  * @username and phone claims (both free for someone else to take), push
- * tokens and chat preferences, the recovery backup, the phone number, every
+ * tokens and chat preferences, the recovery backup, the phone number and any
+ * contacts-only photo, every
  * "Delete for me" and starred list, presence, and the sign-in account itself.
  *
  * Kept: chats and messages. They belong to the other person as well, and they
@@ -94,6 +95,7 @@ export async function deleteAccount(user: User, username: string): Promise<void>
   const batch = writeBatch(db());
   if (phone && phoneClaim?.data()?.uid === uid) batch.delete(doc(db(), 'phones', phone));
   batch.delete(doc(db(), 'users', uid, 'shared', 'contact'));
+  batch.delete(doc(db(), 'users', uid, 'shared', 'photo'));
   batch.delete(doc(db(), 'users', uid, 'private', 'account'));
   batch.delete(doc(db(), 'users', uid, 'private', 'recovery'));
   batch.delete(doc(db(), 'users', uid));

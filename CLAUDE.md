@@ -121,6 +121,21 @@ rather than letting every decryption fail mysteriously.
 - **Pin, mute and archive live on `users/{uid}/private/account`** next to the push tokens, because the
   push route already reads that doc: a muted chat is skipped there at no extra read. Mute must never
   be done in the service worker — browsers revoke push from a worker that shows nothing.
+- **The account doc has one listener for the whole app** (`lib/store/account.ts`), started by the
+  session: prefs, privacy settings, the block list and a hidden own photo all come from it. Screens
+  read the store; they do not listen to the doc themselves.
+- **Privacy settings work by not publishing**, never by asking other clients to look away: read
+  receipts off means `lastRead` is never written (the badge is cleared with `unread.{uid}` alone, and
+  the list's unread state follows that counter); last seen off means no RTDB presence node exists.
+  Hiding either also hides other people's from you, as on WhatsApp. That half is only client courtesy.
+- **A contacts-only photo moves off the public profile**: `users/{uid}.photoURL` becomes null with
+  `contactPhoto: true`, and the photo goes to `users/{uid}/shared/photo`, which has the same audience
+  as the phone number. The owner's copy stays on the account doc.
+- **Blocking is `blocked.{uid}` on the chat doc**, so the message rules check it with the `get()`
+  they already make (no extra billed read). While either flag is set, nothing new can be sent:
+  no messages, edits, reactions, preview, bump or badge. Deleting for everyone still works. The block
+  also hides the blocker's shared docs from the person blocked. `private/account.blocked` mirrors
+  the list for Settings, written in the same batch.
 - **Forwarding re-seals plaintext under the target chat's key**; nothing links the two conversations.
   The copy carries `forwarded: true` for the label — metadata like `replyTo`, set only at send time.
 - **The open thread takes its receipts from the chat list's listener** (`lib/store/chats.ts`) rather

@@ -22,6 +22,9 @@ service cloud.firestore {
     // message. Merely opening a chat with someone whose @username you know is
     // not enough -- they have to have answered. Chat ids are the two uids
     // sorted and joined (enforced on create), so this is one lookup.
+    //
+    // And `uid` has not blocked the caller: someone you block loses your
+    // number and your contacts-only photo with it.
     function hasConversationWith(uid) {
       let me = request.auth.uid;
       let chatId = me < uid ? me + '_' + uid : uid + '_' + me;
@@ -29,7 +32,8 @@ service cloud.firestore {
       return signedIn()
              && exists(path)
              && get(path).data.get('sent', {}).get(me, false) == true
-             && get(path).data.get('sent', {}).get(uid, false) == true;
+             && get(path).data.get('sent', {}).get(uid, false) == true
+             && get(path).data.get('blocked', {}).get(uid, false) != true;
     }
 
     // Ceiling on one message's ciphertext, in characters of base64. Keeps one
@@ -42,6 +46,12 @@ service cloud.firestore {
 
     function chatMembers(chatId) {
       return get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+    }
+
+    // Either member has blocked the other. Same doc as chatMembers(), and
+    // repeat get()s of one doc are billed once per request, so this is free.
+    function chatBlocked(chatId) {
+      return get(/databases/$(database)/documents/chats/$(chatId)).data.get('blocked', {}).size() > 0;
     }
 
     // Profiles are readable one at a time by any signed-in user: @username
@@ -71,10 +81,12 @@ service cloud.firestore {
 
       // Username and public key are identity anchors -- neither may drift after
       // creation, or safety numbers and @handles stop meaning anything. Only
-      // these fields may change at all.
+      // these fields may change at all. contactPhoto says the photo is at
+      // shared/photo, for contacts only (lib/db/privacy.ts).
       allow update: if isSelf(uid)
                     && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup']);
+                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup', 'contactPhoto'])
+                    && request.resource.data.get('contactPhoto', true) == true;
 
       // "Delete my account" (lib/db/account.ts). Chats and the messages in
       // them stay: they belong to the other person too.
@@ -86,8 +98,9 @@ service cloud.firestore {
         allow read, write: if isSelf(uid);
       }
 
-      // The phone number: shown to someone you have actually talked with --
-      // both of you have sent a message -- never to arbitrary signed-in users.
+      // The phone number and a contacts-only photo: shown to someone you have
+      // actually talked with -- both of you have sent a message, and you have
+      // not blocked them -- never to arbitrary signed-in users.
       //
       // The contact doc may show only a number its owner has claimed, so
       // nobody can display a number that belongs to someone else. getAfter()
@@ -96,11 +109,16 @@ service cloud.firestore {
         allow read: if isSelf(uid) || hasConversationWith(uid);
         allow delete: if isSelf(uid);
         allow create, update: if isSelf(uid)
+                              && docId in ['contact', 'photo']
                               && (docId != 'contact'
                                   || request.resource.data.get('phone', null) == null
                                   || (request.resource.data.phone is string
                                       && request.resource.data.phone.matches('^[+][1-9][0-9]{6,14}$')
-                                      && getAfter(/databases/$(database)/documents/phones/$(request.resource.data.phone)).data.uid == uid));
+                                      && getAfter(/databases/$(database)/documents/phones/$(request.resource.data.phone)).data.uid == uid))
+                              && (docId != 'photo'
+                                  || (request.resource.data.keys().hasOnly(['photoURL'])
+                                      && request.resource.data.photoURL is string
+                                      && request.resource.data.photoURL.size() <= 2048));
       }
     }
 
@@ -210,6 +228,32 @@ service cloud.firestore {
                || (changed.hasOnly([request.auth.uid]) && after[request.auth.uid] == true);
       }
 
+      // Blocking: your own flag only, set to true or removed (unblock). Nobody
+      // can block -- or unblock -- on the other member's behalf.
+      function blockChangeOk() {
+        let before = resource.data.get('blocked', {});
+        let after = request.resource.data.get('blocked', {});
+        let changed = after.diff(before).affectedKeys();
+        return changed.size() == 0
+               || (changed.hasOnly([request.auth.uid]) && after.get(request.auth.uid, true) == true);
+      }
+
+      // While either member has the other blocked, the chat goes quiet: no
+      // new preview (except a delete for everyone), no bump to the top of the
+      // list, no badge on the other side. Receipts, clearing your own badge
+      // and the block flags themselves still move.
+      function quietWhileBlocked() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let unreadChanged = request.resource.data.get('unread', {})
+                              .diff(resource.data.get('unread', {})).affectedKeys();
+        return (resource.data.get('blocked', {}).size() == 0
+                && request.resource.data.get('blocked', {}).size() == 0)
+               || (changed.hasOnly(['lastRead', 'lastDelivered', 'unread', 'blocked', 'lastMessage'])
+                   && unreadChanged.hasOnly([request.auth.uid])
+                   && (!('lastMessage' in changed)
+                       || request.resource.data.lastMessage.get('deleted', false) == true));
+      }
+
       // The list preview is a copy of the newest message's ciphertext; it gets
       // the same ceiling as the message.
       function previewSizeOk() {
@@ -227,15 +271,15 @@ service cloud.firestore {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
         return request.resource.data.keys().hasOnly([
                  'members', 'lastMessage', 'lastRead', 'lastDelivered', 'unread', 'sent',
-                 'createdAt', 'updatedAt'])
+                 'blocked', 'createdAt', 'updatedAt'])
                && !('createdAt' in changed)
                && (!('updatedAt' in changed) || request.resource.data.updatedAt == request.time)
                && (!('lastMessage' in changed)
                    || request.resource.data.lastMessage.senderId == request.auth.uid);
       }
 
-      // lastMessage / updatedAt / receipts / unread / sent may move; the
-      // member list may not.
+      // lastMessage / updatedAt / receipts / unread / sent / blocked may move;
+      // the member list may not.
       allow update: if isMember()
                     && request.resource.data.members == resource.data.members
                     && metaChangeOk()
@@ -243,6 +287,8 @@ service cloud.firestore {
                     && ownReceiptOnly('lastDelivered')
                     && unreadChangeOk()
                     && sentChangeOk()
+                    && blockChangeOk()
+                    && quietWhileBlocked()
                     && previewSizeOk();
 
       allow delete: if false;
@@ -286,8 +332,10 @@ service cloud.firestore {
         // createdAt must be the server's clock: the edit window below is
         // measured from it, so a backdated or future-dated message would get
         // the wrong window.
+        // Nothing new in a chat where either member has blocked the other.
         allow create: if signedIn()
                       && request.auth.uid in chatMembers(chatId)
+                      && !chatBlocked(chatId)
                       && request.resource.data.senderId == request.auth.uid
                       && request.resource.data.ciphertext is string
                       && request.resource.data.ciphertext.size() <= MAX_CIPHERTEXT()
@@ -318,12 +366,16 @@ service cloud.firestore {
         //
         // React (any member): your own entry in `reactions` and nothing else,
         // so nobody can put words -- or emoji -- in the other person's mouth.
+        //
+        // In a blocked chat only the delete is left: an edit or a reaction
+        // would be a way of still sending something.
         allow update: if signedIn()
                       && request.auth.uid in chatMembers(chatId)
                       && !resource.data.get('deleted', false)
                       && (
                         (
-                          resource.data.senderId == request.auth.uid
+                          !chatBlocked(chatId)
+                          && resource.data.senderId == request.auth.uid
                           && request.resource.data.diff(resource.data).affectedKeys()
                             .hasOnly(['ciphertext', 'nonce', 'editedAt'])
                           && request.resource.data.ciphertext is string
@@ -339,7 +391,8 @@ service cloud.firestore {
                           && request.resource.data.deletedAt == request.time
                           && !request.resource.data.keys().hasAny(['ciphertext', 'nonce', 'reactions'])
                         ) || (
-                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+                          !chatBlocked(chatId)
+                          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
                           && request.resource.data.reactions is map
                           && request.resource.data.reactions
                                .diff(resource.data.get('reactions', {})).affectedKeys()

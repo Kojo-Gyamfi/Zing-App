@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { needsDeliveryReceipt, needsReadReceipt } from './receipts';
+import { isUnread, needsDeliveryReceipt, needsReadReceipt } from './receipts';
 
 const ME = 'me';
 const PEER = 'peer';
@@ -92,5 +92,26 @@ describe('needsReadReceipt', () => {
 
   it('marks each message at most once, even if the server copy lags', () => {
     expect(needsReadReceipt({ newestIncoming, readAt: at(8), marked: 'm1' })).toBe(false);
+  });
+});
+
+describe('isUnread', () => {
+  const base = { me: ME, lastSenderId: PEER, count: undefined, updatedAt: at(10), readAt: at(5) };
+
+  it('follows the badge counter when the chat has one', () => {
+    expect(isUnread({ ...base, count: 2 })).toBe(true);
+    // Read with receipts off: lastRead never moved, but the counter was cleared.
+    expect(isUnread({ ...base, count: 0 })).toBe(false);
+  });
+
+  it('falls back to timestamps on chats from before the counter', () => {
+    expect(isUnread(base)).toBe(true);
+    expect(isUnread({ ...base, readAt: at(12) })).toBe(false);
+    expect(isUnread({ ...base, readAt: null })).toBe(true);
+  });
+
+  it('is never unread when I sent last, or nothing was sent', () => {
+    expect(isUnread({ ...base, lastSenderId: ME, count: 3 })).toBe(false);
+    expect(isUnread({ ...base, lastSenderId: null })).toBe(false);
   });
 });

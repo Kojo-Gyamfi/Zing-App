@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useChatList, type ChatListRow } from '@/lib/hooks/useChatList';
@@ -9,6 +9,8 @@ import { useSession } from '@/lib/store/session';
 import { useTypingChats } from '@/lib/hooks/useTypingChats';
 import { setChatPref, type ChatPrefs } from '@/lib/db/prefs';
 import { listTime } from '@/lib/format';
+import { setAppBadge } from '@/lib/badge';
+import { useMyPhoto } from '@/lib/store/account';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 import { NotificationPrompt } from '@/components/NotificationPrompt';
@@ -19,6 +21,7 @@ const LONG_PRESS_MS = 450;
 export function ChatListPanel() {
   const { rows, loading, hasMore, loadMore } = useChatList();
   const profile = useSession((state) => state.profile);
+  const myPhoto = useMyPhoto(profile?.photoURL);
   const pathname = usePathname();
   const [filter, setFilter] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -62,6 +65,16 @@ export function ChatListPanel() {
   }, [rows, filter, showArchived, archivedRows, flags]);
 
   const archivedUnread = archivedRows.filter((row) => row.unread).length;
+
+  // The installed app's icon badge: unread messages, muted chats left out as
+  // they are from notifications. Only the chats loaded so far are counted.
+  const badge = useMemo(
+    () => rows.reduce((total, row) => total + (flags.muted.has(row.id) ? 0 : row.unreadCount), 0),
+    [rows, flags],
+  );
+  useEffect(() => {
+    if (!loading) setAppBadge(badge);
+  }, [badge, loading]);
 
   function toggle(pref: keyof ChatPrefs, chatId: string, on: boolean) {
     if (myUid) void setChatPref(myUid, pref, chatId, on).catch(() => undefined);
@@ -112,7 +125,7 @@ export function ChatListPanel() {
           aria-label="Settings"
           className="mt-3 rounded-full p-1 transition-colors hover:bg-elevated"
         >
-          <Avatar name={profile?.displayName ?? '?'} photoURL={profile?.photoURL} size={32} />
+          <Avatar name={profile?.displayName ?? '?'} photoURL={myPhoto} size={32} />
         </Link>
       </header>
 

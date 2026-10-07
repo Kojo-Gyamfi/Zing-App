@@ -19,7 +19,15 @@ import {
   PAGE_SIZE,
 } from '@/lib/db/messages';
 import { withReaction } from '@/lib/reactions';
-import { markRead, onConversationKeyReady, subscribeChat, type ChatSummary } from '@/lib/db/chats';
+import {
+  clearUnread,
+  markRead,
+  onConversationKeyReady,
+  subscribeChat,
+  type ChatSummary,
+} from '@/lib/db/chats';
+import { useAccount, usePrivacy } from '@/lib/store/account';
+import { setBlocked } from '@/lib/db/privacy';
 import { needsReadReceipt } from '@/lib/receipts';
 import { notifyPeers } from '@/lib/notify';
 import { subscribePresence, subscribeTyping, setTyping, type Presence } from '@/lib/db/presence';
@@ -27,6 +35,7 @@ import type { DecryptedMessage, UserDoc } from '@/lib/db/schema';
 
 const TYPING_THROTTLE = 2000;
 const NO_IDS: ReadonlySet<string> = new Set();
+const NO_PRESENCE: Presence = { online: false, lastSeen: null };
 
 /**
  * Everything one conversation needs: the key, the decrypted messages, the
@@ -102,20 +111,14 @@ export function useThread(chatId: string, peerUid: string | null) {
   }, [chatId, user, identity, keyFor, forgetMiss]);
 
   const peerDeleted = useProfiles((state) => (peerUid ? Boolean(state.missing[peerUid]) : false));
+  const privacy = usePrivacy();
 
   useEffect(() => {
     if (!peerUid) return;
     // Fresh: the page checks this profile's public key for changes.
     void loadProfile(peerUid, { fresh: true }).then(setPeer);
+  }, [peerUid, loadProfile]);
 
-    const stopPresence = subscribePresence(peerUid, setPresence);
-    const stopTyping = subscribeTyping(chatId, peerUid, setPeerTyping);
-
-    return () => {
-      stopPresence();
-      stopTyping();
-    };
-  }, [peerUid, chatId, loadProfile]);
 
   useEffect(() => {
     if (!user) return;
@@ -172,6 +175,25 @@ export function useThread(chatId: string, peerUid: string | null) {
   // undefined: not confirmed by the server yet. null: the chat does not exist.
   const confirmed = inList ? listedConfirmed : ownDirect?.confirmed;
 
+  // Blocking, either way round. The rules refuse sends while either is set.
+  const blockedByMe = Boolean(uid && latest?.blocked?.[uid]);
+  const blockedByPeer = Boolean(peerUid && latest?.blocked?.[peerUid]);
+  const blocked = blockedByMe || blockedByPeer;
+
+  // No typing indicator across a block.
+  useEffect(() => {
+    if (!peerUid || blocked) return;
+    return subscribeTyping(chatId, peerUid, setPeerTyping);
+  }, [chatId, peerUid, blocked]);
+
+  // Nor presence. And hiding my own last seen hides theirs from me too, as
+  // on WhatsApp.
+  const showPresence = privacy.lastSeen && !blocked;
+  useEffect(() => {
+    if (!peerUid || !showPresence) return;
+    return subscribePresence(peerUid, setPresence);
+  }, [peerUid, showPresence]);
+
   // As epoch ms, so a fresh snapshot of an unchanged receipt is not a "change"
   // to the effects below; memoised back into Dates on that number alone.
   const peerReadMs = peerUid ? (latest?.lastRead?.[peerUid]?.toDate?.()?.getTime() ?? null) : null;
@@ -182,10 +204,17 @@ export function useThread(chatId: string, peerUid: string | null) {
     !peerUid || !uid || confirmed === undefined
       ? undefined
       : (confirmed?.lastRead?.[uid]?.toDate?.()?.getTime() ?? null);
-  const peerReadAt = useMemo(() => asDate(peerReadMs), [peerReadMs]);
+  // With my read receipts off I see none of theirs either, as on WhatsApp.
+  const peerReadAt = useMemo(
+    () => (privacy.readReceipts ? asDate(peerReadMs) : null),
+    [peerReadMs, privacy.readReceipts],
+  );
   const peerDeliveredAt = useMemo(() => asDate(peerDeliveredMs), [peerDeliveredMs]);
   // My own read receipt as the server has it -- undefined while unconfirmed.
   const myReadAt = useMemo(() => asDate(myReadMs), [myReadMs]);
+  // My badge here as the server has it -- undefined while unconfirmed.
+  const myUnread =
+    !peerUid || !uid || confirmed === undefined ? undefined : (confirmed?.unread?.[uid] ?? 0);
 
   useEffect(() => {
     if (!conversationKey) return;
@@ -231,8 +260,25 @@ export function useThread(chatId: string, peerUid: string | null) {
   // A thread open in a background tab, or a backgrounded app, has not been
   // read: no blue ticks until the person can actually see it.
   const pageVisible = useSyncExternalStore(subscribeVisibility, isPageVisible, () => true);
+  const sendReceipts = privacy.readReceipts;
+  // Until the settings are read, "on" is only the default: wait rather than
+  // send a receipt someone has turned off.
+  const privacyKnown = useAccount((state) => state.known);
   useEffect(() => {
-    if (!user || loading || !pageVisible || !incomingId || incomingAt === undefined) return;
+    if (!user || loading || !pageVisible || !privacyKnown || !incomingId || incomingAt === undefined) {
+      return;
+    }
+
+    // Read receipts off: clear my badge, and never write lastRead.
+    if (!sendReceipts) {
+      if (!myUnread || markedRead.current === incomingId) return;
+      markedRead.current = incomingId;
+      void clearUnread(chatId, user.uid).catch(() => {
+        markedRead.current = null;
+      });
+      return;
+    }
+
     if (
       !needsReadReceipt({
         newestIncoming: { id: incomingId, createdAt: new Date(incomingAt) },
@@ -247,7 +293,18 @@ export function useThread(chatId: string, peerUid: string | null) {
     void markRead(chatId, user.uid).catch(() => {
       markedRead.current = null;
     });
-  }, [chatId, user, loading, pageVisible, myReadAt, incomingId, incomingAt]);
+  }, [
+    chatId,
+    user,
+    loading,
+    pageVisible,
+    privacyKnown,
+    myReadAt,
+    myUnread,
+    sendReceipts,
+    incomingId,
+    incomingAt,
+  ]);
 
   const sendText = useCallback(
     async (text: string, replyTo: string | null = null, forwarded = false) => {
@@ -440,6 +497,20 @@ export function useThread(chatId: string, peerUid: string | null) {
     [chatId, user, identity, keyFor, sendText],
   );
 
+  /**
+   * Block or unblock the other person. Not awaited: the local cache shows the
+   * change at once, and offline the commit would wait for a reconnect.
+   */
+  const setBlock = useCallback(
+    (on: boolean) => {
+      if (!user || !peerUid) return;
+      setBlocked(user.uid, chatId, peerUid, on).catch(() =>
+        flash(on ? 'Could not block. Try again.' : 'Could not unblock. Try again.'),
+      );
+    },
+    [chatId, user, peerUid, flash],
+  );
+
   /** Throttled: one RTDB write every couple of seconds, not one per keystroke. */
   const ping = useCallback(() => {
     if (!user) return;
@@ -503,8 +574,12 @@ export function useThread(chatId: string, peerUid: string | null) {
     peer,
     /** The other person deleted their account: the thread is read-only. */
     peerDeleted,
-    presence,
-    peerTyping,
+    /** Read-only too, until whoever blocked unblocks. */
+    blockedByMe,
+    blockedByPeer,
+    setBlock,
+    presence: showPresence ? presence : NO_PRESENCE,
+    peerTyping: peerTyping && !blocked,
     peerReadAt,
     peerDeliveredAt,
     loading,

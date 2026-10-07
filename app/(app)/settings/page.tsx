@@ -18,15 +18,19 @@ import { deleteAccount, NEEDS_FRESH_SIGNIN } from '@/lib/db/account';
 import { emailCodeError, requestCode, verifyCode } from '@/lib/auth/emailCodeClient';
 import { auth } from '@/lib/firebase/client';
 import { generateRecoveryKey, wrapWithRecoveryKey } from '@/lib/crypto/recovery';
+import { useMyPhoto } from '@/lib/store/account';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
+import { ShareProfileCard } from '@/components/settings/ShareProfileCard';
+import { PrivacySettings } from '@/components/settings/PrivacySettings';
 
 const MIN_PASSPHRASE = 10;
 
 export default function SettingsPage() {
   const { user, profile, identity, signOut, refreshProfile } = useSession();
+  const myPhoto = useMyPhoto(profile?.photoURL);
 
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
@@ -240,7 +244,7 @@ export default function SettingsPage() {
 
       <div className="mx-auto max-w-lg space-y-8 p-4 pb-16">
         <div className="flex items-center gap-4">
-          <Avatar name={profile.displayName} photoURL={profile.photoURL} size={72} />
+          <Avatar name={profile.displayName} photoURL={myPhoto} size={72} />
           <div className="min-w-0">
             <p className="truncate text-lg font-semibold">{profile.displayName}</p>
             <p className="truncate text-[14px] text-muted">@{profile.username}</p>
@@ -283,6 +287,10 @@ export default function SettingsPage() {
             Your @username cannot be changed — it is tied to your encryption identity.
           </p>
         </section>
+
+        <ShareProfileCard profile={profile} />
+
+        <PrivacySettings uid={profile.uid} photoURL={myPhoto} />
 
         <section className="space-y-3">
           <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">

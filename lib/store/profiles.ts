@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { getCachedUser, getUser } from '@/lib/db/users';
+import { getCachedUser, getUser, withContactPhoto } from '@/lib/db/users';
 import type { UserDoc } from '@/lib/db/schema';
 
 /**
@@ -66,19 +66,25 @@ export const useProfiles = create<ProfileState>((set, get) => ({
     // every later load would get the same rejected promise for the session --
     // and it says nothing about whether the account exists. Keep whatever
     // copy we already had.
+    // A photo shown to contacts only is a second doc (UserDoc.contactPhoto),
+    // fetched alongside from the same tier.
     const fromServer = () =>
-      getUser(uid).then(
-        (profile) => {
-          rememberFetched(uid);
-          return settle(profile, { missing: profile === null, verified: true });
-        },
-        () => settle(get().profiles[uid] ?? null, {}),
-      );
+      getUser(uid)
+        .then((profile) => (profile ? withContactPhoto(profile, false) : null))
+        .then(
+          (profile) => {
+            rememberFetched(uid);
+            return settle(profile, { missing: profile === null, verified: true });
+          },
+          () => settle(get().profiles[uid] ?? null, {}),
+        );
 
     const tier = !fresh && fetchedRecently(uid) ? 'any' : 'server';
     const request =
       tier === 'any'
-        ? getCachedUser(uid).then((profile) => (profile ? settle(profile, {}) : fromServer()))
+        ? getCachedUser(uid).then(async (profile) =>
+            profile ? settle(await withContactPhoto(profile, true), {}) : fromServer(),
+          )
         : fromServer();
 
     set((current) => ({ pending: { ...current.pending, [`${uid}:${tier}`]: request } }));

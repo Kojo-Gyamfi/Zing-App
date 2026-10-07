@@ -39,7 +39,8 @@ export function ForwardSheet({
         const peerUid = chat.members.find((member) => member !== me) ?? null;
         return { chat, peer: peerUid ? profiles[peerUid] : undefined, gone: peerUid ? missing[peerUid] : false };
       })
-      .filter((row) => row.peer && !row.gone)
+      // A blocked chat would refuse the message.
+      .filter((row) => row.peer && !row.gone && Object.keys(row.chat.blocked ?? {}).length === 0)
       .filter(
         (row) =>
           !needle ||

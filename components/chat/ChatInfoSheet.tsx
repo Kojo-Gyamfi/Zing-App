@@ -8,6 +8,7 @@ import { useSession } from '@/lib/store/session';
 import { fromB64 } from '@/lib/crypto/codec';
 import { safetyNumber } from '@/lib/crypto/safetyNumber';
 import { lastSeenLabel } from '@/lib/format';
+import { shareProfile } from '@/lib/share';
 import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -15,10 +16,15 @@ import type { UserDoc } from '@/lib/db/schema';
 export function ChatInfoSheet({
   peer,
   presence,
+  blocked,
+  onBlock,
   onClose,
 }: {
   peer: UserDoc;
   presence: Presence;
+  /** I have blocked them. */
+  blocked: boolean;
+  onBlock: (on: boolean) => void;
   onClose: () => void;
 }) {
   const joined = peer.createdAt?.toDate?.();
@@ -38,28 +44,18 @@ export function ChatInfoSheet({
 
   const [shareState, setShareState] = useState<'idle' | 'copied'>('idle');
 
-  // The link carries only the @username, which is already public. Whoever
-  // opens it gets the profile and a Message button, not the phone number.
   async function share() {
-    const url = `${window.location.origin}/u/${peer.username}`;
-    const text = `Chat with ${peer.displayName} (@${peer.username}) on Zing`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: peer.displayName, text, url });
-      } catch {
-        // Dismissed the share sheet; nothing to do.
-      }
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(`${text}: ${url}`);
+    if ((await shareProfile(peer)) === 'copied') {
       setShareState('copied');
       setTimeout(() => setShareState('idle'), 2000);
-    } catch {
-      // Clipboard blocked too; nothing more we can do without a share target.
     }
+  }
+
+  const [confirmingBlock, setConfirmingBlock] = useState(false);
+
+  function toggleBlock(on: boolean) {
+    onBlock(on);
+    setConfirmingBlock(false);
   }
 
   return (
@@ -139,6 +135,36 @@ export function ChatInfoSheet({
 
         <VerifyEncryption peer={peer} />
 
+        {confirmingBlock ? (
+          <div className="space-y-3 rounded-2xl border border-danger/40 bg-void p-4">
+            <p className="text-[14px] leading-relaxed text-ink">Block {peer.displayName}?</p>
+            <p className="text-[13px] leading-relaxed text-muted">
+              Neither of you can send messages in this chat until you unblock, and they lose your
+              phone number and contacts-only photo. Your chat history stays.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmingBlock(false)}
+                className="h-10 flex-1 rounded-xl bg-elevated text-[14px] font-medium text-ink"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => toggleBlock(true)}
+                className="h-10 flex-1 rounded-xl bg-danger text-[14px] font-semibold text-void"
+              >
+                Block
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => (blocked ? toggleBlock(false) : setConfirmingBlock(true))}
+            className="mx-auto block text-[13px] font-medium text-danger"
+          >
+            {blocked ? `Unblock ${peer.displayName}` : `Block ${peer.displayName}`}
+          </button>
+        )}
 
         <div className="flex gap-2">
           <button

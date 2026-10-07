@@ -451,6 +451,141 @@ describe('chat preferences', () => {
   });
 });
 
+/** Both members have sent, so each may see the other's shared docs. */
+async function bothSpoke() {
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore() as unknown as Firestore;
+    await updateDoc(doc(db, 'chats', CHAT), { 'sent.alice': true, 'sent.bob': true });
+  });
+}
+
+describe('blocking', () => {
+  const message = (senderId: string) => ({
+    senderId,
+    ciphertext: 'abc',
+    nonce: 'n',
+    type: 'text',
+    createdAt: serverTimestamp(),
+    replyTo: null,
+  });
+
+  it('lets a member set or clear only their own block', async () => {
+    const chat = doc(as('alice'), 'chats', CHAT);
+    await assertSucceeds(updateDoc(chat, { 'blocked.alice': true }));
+    await assertFails(updateDoc(chat, { 'blocked.bob': true }));
+    // Bob cannot lift the block Alice put on him.
+    await assertFails(updateDoc(doc(as('bob'), 'chats', CHAT), { 'blocked.alice': deleteField() }));
+    await assertFails(updateDoc(chat, { 'blocked.alice': false }));
+    await assertSucceeds(updateDoc(chat, { 'blocked.alice': deleteField() }));
+    await assertFails(updateDoc(doc(as('carol'), 'chats', CHAT), { 'blocked.carol': true }));
+  });
+
+  it('stops new messages, edits and reactions from both sides', async () => {
+    await setDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'mine'), message('alice'));
+    await updateDoc(doc(as('alice'), 'chats', CHAT), { 'blocked.alice': true });
+
+    await assertFails(setDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'b'), message('bob')));
+    await assertFails(setDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'a'), message('alice')));
+    await assertFails(
+      updateDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'm1'), {
+        'reactions.bob': { ciphertext: 'sealed', nonce: 'n' },
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'mine'), {
+        ciphertext: 'changed',
+        nonce: 'n2',
+        editedAt: serverTimestamp(),
+      }),
+    );
+    // Deleting your own message for everyone still works.
+    await assertSucceeds(
+      updateDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'm1'), {
+        ciphertext: deleteField(),
+        nonce: deleteField(),
+        reactions: deleteField(),
+        deleted: true,
+        deletedAt: serverTimestamp(),
+      }),
+    );
+
+    await updateDoc(doc(as('alice'), 'chats', CHAT), { 'blocked.alice': deleteField() });
+    await assertSucceeds(setDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'b'), message('bob')));
+  });
+
+  it('keeps the chat quiet: no preview, bump or badge, but receipts still move', async () => {
+    await updateDoc(doc(as('alice'), 'chats', CHAT), { 'blocked.alice': true });
+    const chat = doc(as('bob'), 'chats', CHAT);
+    await assertFails(
+      updateDoc(chat, {
+        lastMessage: { id: 'b', senderId: 'bob', ciphertext: 'c', nonce: 'n' },
+        updatedAt: serverTimestamp(),
+        'unread.alice': increment(1),
+        'sent.bob': true,
+      }),
+    );
+    await assertFails(updateDoc(chat, { updatedAt: serverTimestamp() }));
+    await assertFails(updateDoc(chat, { 'unread.alice': increment(1) }));
+    await assertFails(updateDoc(chat, { 'sent.bob': true }));
+    await assertSucceeds(updateDoc(chat, { 'unread.bob': 0, 'lastRead.bob': serverTimestamp() }));
+    await assertSucceeds(updateDoc(chat, { 'lastDelivered.bob': serverTimestamp() }));
+    // A delete for everyone of the newest message fixes the preview.
+    await assertSucceeds(updateDoc(chat, { lastMessage: { id: 'm1', senderId: 'bob', deleted: true } }));
+  });
+
+  it('takes the blocker\'s phone number away from the person blocked, not the reverse', async () => {
+    await bothSpoke();
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore() as unknown as Firestore;
+      await setDoc(doc(db, 'users/alice/shared/contact'), { phone: null });
+    });
+    await assertSucceeds(getDoc(doc(as('alice'), 'users/bob/shared/contact')));
+
+    await updateDoc(doc(as('bob'), 'chats', CHAT), { 'blocked.bob': true });
+    await assertFails(getDoc(doc(as('alice'), 'users/bob/shared/contact')));
+    await assertSucceeds(getDoc(doc(as('bob'), 'users/alice/shared/contact')));
+  });
+});
+
+describe('profile photo for contacts only', () => {
+  const photo = { photoURL: 'https://lh3.googleusercontent.com/a/photo' };
+
+  it('lets the owner move the photo off the public profile', async () => {
+    const bob = as('bob');
+    const batch = writeBatch(bob);
+    batch.update(doc(bob, 'users', 'bob'), { photoURL: null, contactPhoto: true });
+    batch.set(doc(bob, 'users/bob/shared/photo'), photo);
+    await assertSucceeds(batch.commit());
+    await assertFails(updateDoc(doc(as('bob'), 'users', 'bob'), { contactPhoto: false }));
+    await assertSucceeds(updateDoc(doc(as('bob'), 'users', 'bob'), { contactPhoto: deleteField() }));
+  });
+
+  it('accepts only a photo URL, and only the known shared docs', async () => {
+    await assertFails(setDoc(doc(as('bob'), 'users/bob/shared/photo'), { photoURL: 42 }));
+    await assertFails(setDoc(doc(as('bob'), 'users/bob/shared/photo'), { ...photo, extra: 1 }));
+    await assertFails(
+      setDoc(doc(as('bob'), 'users/bob/shared/photo'), { photoURL: 'x'.repeat(2049) }),
+    );
+    await assertFails(setDoc(doc(as('bob'), 'users/bob/shared/other'), photo));
+    await assertFails(setDoc(doc(as('alice'), 'users/bob/shared/photo'), photo));
+  });
+
+  it('shows it to contacts only, and not to someone blocked', async () => {
+    await setDoc(doc(as('bob'), 'users/bob/shared/photo'), photo);
+    const read = (uid: string) => getDoc(doc(as(uid), 'users/bob/shared/photo'));
+    await assertSucceeds(read('bob'));
+    await assertFails(read('alice'));
+    await assertFails(read('carol'));
+
+    await bothSpoke();
+    await assertSucceeds(read('alice'));
+    await assertFails(read('carol'));
+
+    await updateDoc(doc(as('bob'), 'chats', CHAT), { 'blocked.bob': true });
+    await assertFails(read('alice'));
+  });
+});
+
 describe('server-only data', () => {
   it('keeps the push rate-limit counters away from clients', async () => {
     await assertFails(getDoc(doc(as('alice'), 'pushLimits', 'alice')));

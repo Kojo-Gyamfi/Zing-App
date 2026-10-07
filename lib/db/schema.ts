@@ -18,6 +18,12 @@ export type UserDoc = {
   publicKey: string;     // base64 X25519
   keyBackup: KeyBackup;  // Argon2id-wrapped private key; useless without the passphrase
   createdAt: Timestamp;
+  /**
+   * The photo is for contacts only: photoURL is null here and the real one is
+   * at users/{uid}/shared/photo, which the rules open only to people this user
+   * has a conversation with. Absent for "everyone" and "nobody".
+   */
+  contactPhoto?: boolean;
 };
 
 /**
@@ -37,7 +43,38 @@ export type AccountDoc = {
   muted?: string[];
   /** Chat ids moved out of the main list into "Archived". */
   archived?: string[];
+  /** What this user shows other people. A missing field means the default. */
+  privacy?: Partial<Privacy>;
+  /**
+   * Uids this user has blocked, for the Settings list and the push route. The
+   * block the rules enforce is `blocked` on the chat doc; the two are written
+   * in one batch.
+   */
+  blocked?: string[];
+  /**
+   * The owner's own photo while it is off the public profile, so they still
+   * see it and can put it back. See UserDoc.contactPhoto.
+   */
+  photoURL?: string | null;
 };
+
+export type PhotoVisibility = 'everyone' | 'contacts' | 'nobody';
+
+/**
+ * Privacy settings. Each works by not publishing the data rather than by
+ * asking other clients to look away: receipts off means lastRead is never
+ * written, last seen off means there is no presence node to read.
+ *
+ * Like WhatsApp, hiding your read receipts or last seen also hides other
+ * people's from you. That half is this app's courtesy, not a rule.
+ */
+export type Privacy = {
+  readReceipts: boolean;
+  lastSeen: boolean;
+  photo: PhotoVisibility;
+};
+
+export const DEFAULT_PRIVACY: Privacy = { readReceipts: true, lastSeen: true, photo: 'everyone' };
 
 /** Like WhatsApp: pinning is for the few chats that matter most. */
 export const MAX_PINNED = 3;
@@ -55,6 +92,11 @@ export type RecoveryDoc = {
 /** users/{uid}/shared/contact -- readable by its owner and anyone they have a chat with. */
 export type ContactDoc = {
   phone: string | null;  // optional; mirrored as a phones/{phone} claim for discovery
+};
+
+/** users/{uid}/shared/photo -- same audience as the contact doc. See UserDoc.contactPhoto. */
+export type ContactPhotoDoc = {
+  photoURL: string;
 };
 
 export type PhoneDoc = {
@@ -86,6 +128,12 @@ export type ChatDoc = {
    * resets their own to zero. Absent on chats from before the badge existed.
    */
   unread?: Record<string, number>;
+  /**
+   * Member uid -> true while they have the other blocked. Either flag stops
+   * new messages, reactions and edits from both sides (the rules enforce it),
+   * and the blocked member can no longer read the blocker's phone or photo.
+   */
+  blocked?: Record<string, true>;
   createdAt: Timestamp;
 };
 

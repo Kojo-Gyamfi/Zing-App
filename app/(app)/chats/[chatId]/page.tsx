@@ -46,6 +46,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     messages,
     peer,
     peerDeleted,
+    blockedByMe,
+    blockedByPeer,
+    setBlock,
     presence,
     peerTyping,
     loading,
@@ -479,14 +482,32 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         </p>
       )}
 
-      <Composer
-        onSend={handleSend}
-        onTyping={ping}
-        disabled={peerDeleted || !conversationKey}
-        disabledText={peerDeleted ? 'This account was deleted' : undefined}
-        context={composerContext}
-        onCancelContext={() => setComposerContext(null)}
-      />
+      {blockedByMe ? (
+        <div className="flex items-center justify-center gap-3 border-t border-line bg-surface px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <p className="text-[13px] text-muted">You blocked {peer?.displayName ?? 'this person'}.</p>
+          <button
+            onClick={() => setBlock(false)}
+            className="h-9 rounded-full bg-elevated px-4 text-[13px] font-medium text-zing"
+          >
+            Unblock
+          </button>
+        </div>
+      ) : (
+        <Composer
+          onSend={handleSend}
+          onTyping={ping}
+          disabled={peerDeleted || blockedByPeer || !conversationKey}
+          disabledText={
+            peerDeleted
+              ? 'This account was deleted'
+              : blockedByPeer
+                ? 'You can’t send messages in this chat'
+                : undefined
+          }
+          context={composerContext}
+          onCancelContext={() => setComposerContext(null)}
+        />
+      )}
 
       {menuFor && (
         <MessageMenu
@@ -494,7 +515,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           mine={menuFor.senderId === user?.uid}
           myReaction={(user && menuFor.reactions?.[user.uid]) || null}
           starred={starredIds.has(menuFor.id)}
-          canReact={conversationKey !== null && !peerDeleted}
+          canReact={conversationKey !== null && !peerDeleted && !blockedByMe && !blockedByPeer}
           onReply={() => replyTo(menuFor)}
           onEdit={() =>
             menuFor.text !== null &&
@@ -526,7 +547,13 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       )}
 
       {infoOpen && peer && (
-        <ChatInfoSheet peer={peer} presence={presence} onClose={() => setInfoOpen(false)} />
+        <ChatInfoSheet
+          peer={peer}
+          presence={presence}
+          blocked={blockedByMe}
+          onBlock={setBlock}
+          onClose={() => setInfoOpen(false)}
+        />
       )}
     </div>
   );

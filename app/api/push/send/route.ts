@@ -65,6 +65,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
+  // The rules refuse messages in a blocked chat, but this route is called
+  // separately, so a hand-rolled client could still try to buzz the blocker.
+  if (Object.keys(chat.data()?.blocked ?? {}).length > 0) {
+    return NextResponse.json({ sent: 0 });
+  }
+
   const [sender, ...recipients] = await Promise.all([
     adminDb().doc(`users/${senderUid}`).get(),
     ...members

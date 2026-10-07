@@ -192,6 +192,14 @@ export async function markRead(chatId: string, uid: string): Promise<void> {
 }
 
 /**
+ * markRead for someone with read receipts turned off: their badge clears, but
+ * lastRead -- the other person's blue ticks -- is never written.
+ */
+export async function clearUnread(chatId: string, uid: string): Promise<void> {
+  await updateDoc(doc(db(), 'chats', chatId), { [`unread.${uid}`]: 0 });
+}
+
+/**
  * The second tick. Written whenever the chat list -- which is subscribed for
  * as long as the app is open -- sees a message it has not acknowledged, so
  * delivery is recorded without the recipient opening the conversation.

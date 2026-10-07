@@ -10,7 +10,7 @@ import {
   arrayRemove,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
-import type { UserDoc, AccountDoc, ContactDoc, RecoveryDoc } from './schema';
+import type { UserDoc, AccountDoc, ContactDoc, ContactPhotoDoc, RecoveryDoc } from './schema';
 import type { KeyBackup } from '@/lib/crypto/types';
 import { normalizePhone, tryNormalizePhone } from '@/lib/phone';
 
@@ -27,6 +27,25 @@ export async function getUser(uid: string): Promise<UserDoc | null> {
 export async function getCachedUser(uid: string): Promise<UserDoc | undefined> {
   const snapshot = await getDocFromCache(doc(db(), 'users', uid)).catch(() => null);
   return snapshot?.exists() ? (snapshot.data() as UserDoc) : undefined;
+}
+
+/**
+ * A profile with its contacts-only photo filled in, when this user may see it.
+ * The rules refuse anyone without a conversation with them, which here just
+ * means no photo. `cacheFirst` takes this device's offline copy when it has
+ * one, as the chat list does for the profile itself.
+ */
+export async function withContactPhoto(profile: UserDoc, cacheFirst: boolean): Promise<UserDoc> {
+  if (!profile.contactPhoto || profile.photoURL) return profile;
+  const ref = doc(db(), 'users', profile.uid, 'shared', 'photo');
+  try {
+    const cached = cacheFirst ? await getDocFromCache(ref).catch(() => null) : null;
+    const snapshot = cached?.exists() ? cached : await getDoc(ref);
+    const photoURL = (snapshot.data() as ContactPhotoDoc | undefined)?.photoURL;
+    return photoURL ? { ...profile, photoURL } : profile;
+  } catch {
+    return profile;
+  }
 }
 
 export function normalizeUsername(raw: string): string {

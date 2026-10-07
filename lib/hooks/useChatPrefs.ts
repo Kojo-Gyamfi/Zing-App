@@ -1,20 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { NO_PREFS, subscribeChatPrefs, type ChatPrefs } from '@/lib/db/prefs';
+import { NO_PREFS, type ChatPrefs } from '@/lib/db/prefs';
+import { useAccount } from '@/lib/store/account';
 
 /**
  * Pinned, muted and archived chats, live -- so a change on one device shows on
- * the others. One read when the list opens, one per change after that.
+ * the others. Read from the account listener the session keeps open, so this
+ * costs no reads of its own.
  */
 export function useChatPrefs(uid: string | undefined): ChatPrefs {
-  const [prefs, setPrefs] = useState<{ uid: string; prefs: ChatPrefs } | null>(null);
-
-  useEffect(() => {
-    if (!uid) return;
-    return subscribeChatPrefs(uid, (next) => setPrefs({ uid, prefs: next }));
-  }, [uid]);
-
   // Never another account's preferences, for the moment after switching.
-  return prefs && prefs.uid === uid ? prefs.prefs : NO_PREFS;
+  return useAccount((state) => (uid && state.owner === uid ? state.settings.prefs : NO_PREFS));
 }

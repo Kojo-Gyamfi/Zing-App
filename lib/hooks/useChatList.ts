@@ -7,7 +7,7 @@ import { useProfiles } from '@/lib/store/profiles';
 import { useChats } from '@/lib/store/chats';
 import { subscribeChats, markDelivered, CHAT_PAGE_SIZE, type ChatSummary } from '@/lib/db/chats';
 import { decryptPreview, latestVisibleMessage, subscribeAllHidden, DELETED_LABEL } from '@/lib/db/messages';
-import { needsDeliveryReceipt } from '@/lib/receipts';
+import { isUnread, needsDeliveryReceipt } from '@/lib/receipts';
 import type { UserDoc } from '@/lib/db/schema';
 
 export type ChatListRow = {
@@ -141,12 +141,14 @@ export function useChatList() {
           });
         }
 
-        // Approximate but cheap: anything newer than my last open, that I
-        // did not send myself.
-        const unread =
-          chat.lastMessage !== null &&
-          chat.lastMessage.senderId !== uid &&
-          (readAt === null || (updatedAt !== null && updatedAt > readAt));
+        const count = chat.unread?.[uid];
+        const unread = isUnread({
+          me: uid,
+          lastSenderId: chat.lastMessage?.senderId ?? null,
+          count,
+          updatedAt,
+          readAt,
+        });
 
         return {
           id: chat.id,
@@ -157,7 +159,7 @@ export function useChatList() {
           updatedAt,
           unread,
           // Chats from before the counter existed have none: show 1, not 0.
-          unreadCount: unread ? Math.max(chat.unread?.[uid] ?? 0, 1) : 0,
+          unreadCount: unread ? Math.max(count ?? 0, 1) : 0,
           peerReadAt: peerUid ? (chat.lastRead?.[peerUid]?.toDate?.() ?? null) : null,
           peerDeliveredAt: peerUid ? (chat.lastDelivered?.[peerUid]?.toDate?.() ?? null) : null,
         };

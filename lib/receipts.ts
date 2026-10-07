@@ -28,6 +28,27 @@ export function needsDeliveryReceipt(params: {
   return deliveredAt === null || updatedAt > deliveredAt;
 }
 
+/**
+ * Whether a chat shows as unread in the list. The badge counter decides when
+ * the chat has one: it is cleared on opening whether or not read receipts are
+ * on, while lastRead is never written with them off. Older chats with no
+ * counter yet fall back to "anything newer than my last open".
+ */
+export function isUnread(params: {
+  me: string;
+  lastSenderId: string | null;
+  /** unread.{me} on the chat doc; undefined on chats from before the counter. */
+  count: number | undefined;
+  updatedAt: Date | null;
+  readAt: Date | null;
+}): boolean {
+  const { me, lastSenderId, count, updatedAt, readAt } = params;
+
+  if (lastSenderId === null || lastSenderId === me) return false;
+  if (count !== undefined) return count > 0;
+  return readAt === null || (updatedAt !== null && updatedAt > readAt);
+}
+
 export function needsReadReceipt(params: {
   /** Newest message from the other person, if any is loaded. */
   newestIncoming: { id: string; createdAt: Date | null } | undefined;

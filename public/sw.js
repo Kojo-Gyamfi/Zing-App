@@ -180,6 +180,14 @@ self.addEventListener('push', (event) => {
         timestamp: Date.now(),
         data: { chatId, count, lines },
       });
+
+      // The app icon's badge while the app is closed: messages waiting in
+      // notifications. The chat list sets the exact count once it is open.
+      if (self.navigator.setAppBadge) {
+        const waiting = await self.registration.getNotifications();
+        const total = waiting.reduce((sum, entry) => sum + (entry.data?.count ?? 0), 0);
+        await self.navigator.setAppBadge(total).catch(() => undefined);
+      }
     })(),
   );
 });
