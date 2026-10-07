@@ -71,23 +71,26 @@ export default function OnboardingPage() {
     }
 
     setBusy(true);
-    if (await findByUsername(handle)) {
-      setError('That username is taken.');
+    try {
+      if (await findByUsername(handle)) {
+        setError('That username is taken.');
+        return;
+      }
+      if (phone.trim() && !tryNormalizePhone(phone)) {
+        setPhoneError(PHONE_INVALID_MESSAGE);
+        return;
+      }
+      if (phone.trim() && (await findByPhone(phone))) {
+        setPhoneError('That number is already linked to another account.');
+        return;
+      }
+      setStep('passphrase');
+    } catch {
+      // Offline: the lookups cannot answer. Continue would stay disabled.
+      setError('Could not check that handle. Check your connection and try again.');
+    } finally {
       setBusy(false);
-      return;
     }
-    if (phone.trim() && !tryNormalizePhone(phone)) {
-      setPhoneError(PHONE_INVALID_MESSAGE);
-      setBusy(false);
-      return;
-    }
-    if (phone.trim() && (await findByPhone(phone))) {
-      setPhoneError('That number is already linked to another account.');
-      setBusy(false);
-      return;
-    }
-    setBusy(false);
-    setStep('passphrase');
   }
 
   async function finish() {
@@ -122,7 +125,11 @@ export default function OnboardingPage() {
         phone: phone.trim() || null,
       });
 
-      await saveIdentity(identity.privateKey);
+      // The account exists from here on. A device that cannot store the key
+      // (storage blocked) must still show the recovery key -- retrying would
+      // only fail on "username taken" by this very account. The key stays in
+      // memory for this session; the passphrase brings it back next time.
+      await saveIdentity(identity.privateKey).catch(() => undefined);
 
       setCreatedIdentity(identity);
       setRecoveryKey(freshRecoveryKey);
@@ -146,8 +153,14 @@ export default function OnboardingPage() {
   async function enterApp() {
     if (!identity) return;
     setBusy(true);
-    const profile = await getUser(user!.uid);
-    if (profile) setIdentity(identity, profile);
+    try {
+      const profile = await getUser(user!.uid);
+      if (profile) setIdentity(identity, profile);
+    } catch {
+      setError('Could not open the app. Check your connection and try again.');
+      setBusy(false);
+      return;
+    }
     clearLoginIntent();
     router.replace(returnPath());
   }
@@ -243,6 +256,8 @@ export default function OnboardingPage() {
             />
             I&apos;ve saved my recovery key.
           </label>
+
+          {error && <p className="text-[13px] text-danger">{error}</p>}
 
           <Button
             onClick={() => void enterApp()}

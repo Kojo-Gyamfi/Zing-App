@@ -91,7 +91,7 @@ export function MessageMenu({
         role="dialog"
         aria-label="Message actions"
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-md rounded-t-3xl border-t border-line bg-surface p-3
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto scroll-thin rounded-t-3xl border-t border-line bg-surface p-3
           pb-[max(0.75rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
       >
         {canReact && !message.deleted && !confirming && (

@@ -133,7 +133,7 @@ export async function loadConversationKey(
 
   // Cached for the service worker, which has to decrypt notification previews
   // while the app is closed and cannot reach Firestore to fetch this.
-  void saveSealedKey(chatId, sealed);
+  void saveSealedKey(chatId, sealed).catch(() => undefined);
 
   return openConversationKey(sealed, identity);
 }
@@ -221,17 +221,24 @@ export async function markDelivered(chatId: string, uid: string): Promise<void> 
 
 /** Live receipts for one conversation, so ticks update as the peer reads. */
 export function subscribeChat(chatId: string, onChange: (chat: ChatSummary | null) => void) {
-  return onSnapshot(doc(db(), 'chats', chatId), (snapshot) => {
-    onChange(
-      snapshot.exists()
-        ? {
-            id: snapshot.id,
-            ...(snapshot.data({ serverTimestamps: 'estimate' }) as ChatDoc),
-            pending: snapshot.metadata.hasPendingWrites,
-          }
-        : null,
-    );
-  });
+  return onSnapshot(
+    doc(db(), 'chats', chatId),
+    (snapshot) => {
+      // Offline with nothing cached says nothing about whether it exists.
+      if (!snapshot.exists() && snapshot.metadata.fromCache) return;
+      onChange(
+        snapshot.exists()
+          ? {
+              id: snapshot.id,
+              ...(snapshot.data({ serverTimestamps: 'estimate' }) as ChatDoc),
+              pending: snapshot.metadata.hasPendingWrites,
+            }
+          : null,
+      );
+    },
+    // Refused: not a member, so for this user the chat does not exist.
+    () => onChange(null),
+  );
 }
 
 /**

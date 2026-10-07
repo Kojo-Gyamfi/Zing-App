@@ -257,6 +257,19 @@ describe('chats', () => {
     await assertFails(updateDoc(chat, preview(22_001)));
   });
 
+  it('refuses a preview with fields of the wrong type, which would break both chat lists', async () => {
+    const chat = doc(as('alice'), 'chats', CHAT);
+    const base = { id: 'm', senderId: 'alice', ciphertext: 'c', nonce: 'n' };
+    await assertSucceeds(updateDoc(chat, { lastMessage: base }));
+    await assertSucceeds(
+      updateDoc(chat, { lastMessage: { ...base, expiresAt: Timestamp.fromMillis(Date.now() + 1000) } }),
+    );
+    await assertFails(updateDoc(chat, { lastMessage: { ...base, expiresAt: 5 } }));
+    await assertFails(updateDoc(chat, { lastMessage: { ...base, ciphertext: 42 } }));
+    await assertFails(updateDoc(chat, { lastMessage: { ...base, extra: 'field' } }));
+    await assertFails(updateDoc(chat, { lastMessage: 'not a map' }));
+  });
+
   it('never changes the member list', async () => {
     await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { members: ['alice', 'carol'] }));
   });

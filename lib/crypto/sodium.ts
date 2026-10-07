@@ -19,11 +19,18 @@ let pending: Promise<Sodium> | null = null;
  */
 export function getSodium(): Promise<Sodium> {
   if (!pending) {
-    pending = import('libsodium-wrappers-sumo').then(async (module) => {
-      const sodium = module.default;
-      await sodium.ready;
-      return sodium;
-    });
+    pending = import('libsodium-wrappers-sumo')
+      .then(async (module) => {
+        const sodium = module.default;
+        await sodium.ready;
+        return sodium;
+      })
+      .catch((cause: unknown) => {
+        // Not cached: a chunk that failed to load (offline launch of the
+        // installed app) would otherwise fail every decrypt until a reload.
+        pending = null;
+        throw cause;
+      });
   }
   return pending;
 }

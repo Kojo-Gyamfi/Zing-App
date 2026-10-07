@@ -39,7 +39,7 @@ export function ChatRowMenu({
         role="dialog"
         aria-label={`Chat with ${name}`}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-md rounded-t-3xl border-t border-line bg-surface p-3
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto scroll-thin rounded-t-3xl border-t border-line bg-surface p-3
           pb-[max(0.75rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
       >
         <p className="mx-3 mt-2 mb-2 truncate text-[15px] font-semibold">{name}</p>

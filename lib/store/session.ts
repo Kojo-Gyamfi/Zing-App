@@ -204,7 +204,10 @@ export const useSession = create<SessionState>((set, get) => ({
     // read half-typed messages.
     setAppBadge(0);
     clearDrafts();
-    await clearIdentity();
+    // Storage that cannot be opened holds no key we could read back either;
+    // signing out must still happen, or the button silently does nothing --
+    // and blocked storage is exactly what strands people on /unlock.
+    await clearIdentity().catch(() => undefined);
     await firebaseSignOut(auth());
     useKeys.getState().clear();
     set({ status: 'signedOut', user: null, profile: null, identity: null });

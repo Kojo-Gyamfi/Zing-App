@@ -19,7 +19,10 @@ import type { UserDoc } from '@/lib/db/schema';
  * opening the link does not have a chat with them yet.
  */
 export default function SharedProfilePage({ params }: { params: Promise<{ username: string }> }) {
-  const { username } = use(params);
+  const { username: raw } = use(params);
+  // A malformed escape in the link (/u/%E0) is left encoded by the router and
+  // would make decodeURIComponent throw -- the whole page, every retry.
+  const username = safeDecode(raw);
   const router = useRouter();
   const { user, identity } = useSession();
 
@@ -30,7 +33,7 @@ export default function SharedProfilePage({ params }: { params: Promise<{ userna
 
   useEffect(() => {
     let live = true;
-    void findByUsername(decodeURIComponent(username))
+    void findByUsername(username)
       .catch(() => null)
       .then((found) => {
         if (live) setPerson(found);
@@ -80,7 +83,7 @@ export default function SharedProfilePage({ params }: { params: Promise<{ userna
           <div className="space-y-2 py-16">
             <p className="text-[15px] text-ink">This profile doesn&apos;t exist.</p>
             <p className="text-[13px] text-muted">
-              The link may be mistyped, or @{decodeURIComponent(username)} was never taken.
+              The link may be mistyped, or @{username} was never taken.
             </p>
           </div>
         ) : (
@@ -107,4 +110,12 @@ export default function SharedProfilePage({ params }: { params: Promise<{ userna
       </div>
     </div>
   );
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

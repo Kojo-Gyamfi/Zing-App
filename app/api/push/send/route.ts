@@ -28,9 +28,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
+  // Set up the admin SDK on its own first: a missing or broken
+  // FIREBASE_SERVICE_ACCOUNT is our misconfiguration, and must show up in the
+  // logs as one -- not pass for a bad token, which the app quietly ignores.
+  let auth: ReturnType<typeof adminAuth>;
+  try {
+    auth = adminAuth();
+  } catch (cause) {
+    console.error('Push: the Firebase Admin SDK could not start', cause);
+    return NextResponse.json({ error: 'server misconfigured' }, { status: 500 });
+  }
+
   let senderUid: string;
   try {
-    senderUid = (await adminAuth().verifyIdToken(idToken)).uid;
+    senderUid = (await auth.verifyIdToken(idToken)).uid;
   } catch {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

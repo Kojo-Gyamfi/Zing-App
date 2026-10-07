@@ -18,6 +18,7 @@ import {
   loadOlderMessages,
   hasExpired,
   removeExpiredMessage,
+  DELETE_SLACK_MS,
   PAGE_SIZE,
 } from '@/lib/db/messages';
 import { withReaction } from '@/lib/reactions';
@@ -399,12 +400,13 @@ export function useThread(chatId: string, peerUid: string | null) {
         text: text.trim(),
         conversationKey,
         isLatest: isLatest(id),
+        expiresAt: (messages.find((message) => message.id === id) ?? before)?.expiresAt ?? null,
       }).catch(() => {
         if (before) patchOlder(id, before);
         flash('That message can no longer be edited.');
       });
     },
-    [chatId, user, conversationKey, older, isLatest, patchOlder, flash],
+    [chatId, user, conversationKey, older, messages, isLatest, patchOlder, flash],
   );
 
   const deleteForEveryone = useCallback(
@@ -550,8 +552,13 @@ export function useThread(chatId: string, peerUid: string | null) {
     loadingOlder.current = true;
     try {
       const page = await loadOlderMessages(chatId, conversationKey, oldest);
-      if (page.length < PAGE_SIZE) setExhausted(true);
-      setOlder((current) => [...page, ...current]);
+      // A short page from the offline cache only means nothing more is
+      // cached; marking the chat "fully loaded" then would stick after the
+      // connection returns.
+      if (page.messages.length < PAGE_SIZE && !page.fromCache) setExhausted(true);
+      setOlder((current) => [...page.messages, ...current]);
+    } catch {
+      // Offline with nothing cached, or refused: the next scroll tries again.
     } finally {
       loadingOlder.current = false;
     }
@@ -567,12 +574,16 @@ export function useThread(chatId: string, peerUid: string | null) {
   // Disappearing messages leave the screen the moment they expire: a timer
   // for the next one due (re-armed at least hourly, since setTimeout cannot
   // wait 90 days), and the first device to notice deletes it for good.
+  // Two moments matter per message: hiding it (its expiry, this clock) and
+  // deleting it, DELETE_SLACK_MS later so a fast clock is not refused.
   const [now, setNow] = useState(() => Date.now());
   const nextExpiry = useMemo(() => {
     let next: number | null = null;
     for (const message of [...older, ...messages]) {
       const at = message.expiresAt?.getTime();
-      if (at !== undefined && at > now && (next === null || at < next)) next = at;
+      if (at === undefined) continue;
+      const due = at > now ? at : at + DELETE_SLACK_MS > now ? at + DELETE_SLACK_MS : null;
+      if (due !== null && (next === null || due < next)) next = due;
     }
     return next;
   }, [older, messages, now]);
@@ -588,9 +599,15 @@ export function useThread(chatId: string, peerUid: string | null) {
   const removing = useRef(new Set<string>());
   useEffect(() => {
     for (const message of [...older, ...messages]) {
-      if (message.pending || !hasExpired(message, now) || removing.current.has(message.id)) continue;
-      // Tried once per session: refused only when this clock runs ahead of
-      // the server's, and then the next look will do.
+      if (
+        message.pending ||
+        !hasExpired(message, now - DELETE_SLACK_MS) ||
+        removing.current.has(message.id)
+      ) {
+        continue;
+      }
+      // Tried once per session: refused only when this clock runs far ahead
+      // of the server's, and then the sender's sweep will do.
       removing.current.add(message.id);
       void removeExpiredMessage(chatId, message.id).catch(() => undefined);
     }
@@ -626,6 +643,11 @@ export function useThread(chatId: string, peerUid: string | null) {
     peer,
     /** The other person deleted their account: the thread is read-only. */
     peerDeleted,
+    /**
+     * No such chat for this user (a mistyped or stale link, or someone else's
+     * conversation): there is no key coming, so stop waiting for one.
+     */
+    unavailable: confirmed === null && !conversationKey,
     /** Read-only too, until whoever blocked unblocks. */
     blockedByMe,
     blockedByPeer,

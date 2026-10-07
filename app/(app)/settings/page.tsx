@@ -93,6 +93,7 @@ export default function SettingsPage() {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
 
   const [changingPassphrase, setChangingPassphrase] = useState(false);
@@ -199,10 +200,20 @@ export default function SettingsPage() {
 
     setSaving(true);
     setPhoneError(null);
-    await updateProfile(profile.uid, {
-      displayName: displayName.trim() || profile.displayName,
-      about: about.trim(),
-    });
+    setSaveError(null);
+
+    // Name and about first, on their own: a refused write must say so, not
+    // leave "Save changes" spinning.
+    try {
+      await updateProfile(profile.uid, {
+        displayName: displayName.trim() || profile.displayName,
+        about: about.trim(),
+      });
+    } catch {
+      setSaveError('Could not save your profile. Check your connection and try again.');
+      setSaving(false);
+      return;
+    }
 
     try {
       await savePhone(profile.uid, phone);
@@ -282,6 +293,7 @@ export default function SettingsPage() {
             </Button>
             {saved && <span className="text-[13px] text-zing">Saved</span>}
           </div>
+          {saveError && <p className="text-[12px] text-danger">{saveError}</p>}
 
           <p className="text-[12px] text-faint">
             Your @username cannot be changed — it is tied to your encryption identity.

@@ -23,7 +23,21 @@ const HOUR_MS = 60 * 60 * 1000;
  * does tell a caller whether an address is registered; the per-IP limit keeps
  * that from being done in bulk.
  */
+/**
+ * Anything unexpected -- a missing secret or service account, Firestore
+ * unreachable -- answers 500 and is logged as ours, rather than escaping as
+ * an unexplained crash or being mistaken for the user's fault.
+ */
 export async function POST(request: Request) {
+  try {
+    return await handle(request);
+  } catch (cause) {
+    console.error('Email code: sending a sign-in code failed', cause);
+    return NextResponse.json({ error: 'server-error' }, { status: 500 });
+  }
+}
+
+async function handle(request: Request) {
   let body: { email?: unknown; intent?: unknown };
   try {
     body = await request.json();
@@ -81,9 +95,11 @@ async function hasZingAccount(email: string): Promise<boolean> {
   try {
     const user = await adminAuth().getUserByEmail(email);
     return (await adminDb().doc(`users/${user.uid}`).get()).exists;
-  } catch {
-    // auth/user-not-found
-    return false;
+  } catch (cause) {
+    if ((cause as { code?: string }).code === 'auth/user-not-found') return false;
+    // An outage is not "no account": telling a real user theirs does not
+    // exist would send them to sign up again.
+    throw cause;
   }
 }
 

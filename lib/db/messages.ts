@@ -133,9 +133,32 @@ async function decrypt(
     pending: entry.metadata.hasPendingWrites,
     reactions: deleted ? {} : await openReactions(data.reactions, conversationKey),
     forwarded: !deleted && data.forwarded === true,
-    expiresAt: data.expiresAt?.toDate() ?? null,
+    expiresAt: asDate(data.expiresAt),
   };
 }
+
+function asDate(value: unknown): Date | null {
+  const ms = timestampMs(value);
+  return ms === null ? null : new Date(ms);
+}
+
+/**
+ * Milliseconds from a Firestore Timestamp, or null for anything else. For
+ * fields another client wrote: a value that is not a Timestamp must read as
+ * "none", not throw inside a list build.
+ */
+export function timestampMs(value: unknown): number | null {
+  const toMillis = (value as { toMillis?: unknown } | null | undefined)?.toMillis;
+  return typeof toMillis === 'function' ? (toMillis.call(value) as number) : null;
+}
+
+/**
+ * How long past its expiry a message is left before this device deletes it.
+ * Hiding uses this device's clock; deleting is judged by the server's, and a
+ * phone running fast would otherwise be refused (and, in the sweep, take the
+ * rest of that chat's batch down with it).
+ */
+export const DELETE_SLACK_MS = 2 * 60 * 1000;
 
 /** A disappearing message whose time is up. Hidden everywhere from that moment. */
 export function hasExpired(message: { expiresAt?: Date | null }, now = Date.now()): boolean {
@@ -163,7 +186,7 @@ export async function sweepExpiredMessages(uid: string): Promise<void> {
     query(
       collectionGroup(db(), 'messages'),
       where('senderId', '==', uid),
-      where('expiresAt', '<=', Timestamp.now()),
+      where('expiresAt', '<=', Timestamp.fromMillis(Date.now() - DELETE_SLACK_MS)),
       limit(200),
     ),
   );
@@ -257,6 +280,8 @@ export async function editMessage(params: {
   text: string;
   conversationKey: Uint8Array;
   isLatest: boolean;
+  /** The message's own expiry, kept on the rewritten preview. */
+  expiresAt?: Date | null;
 }): Promise<void> {
   if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
@@ -270,7 +295,14 @@ export async function editMessage(params: {
 
   if (params.isLatest) {
     batch.update(doc(db(), 'chats', params.chatId), {
-      lastMessage: { id: params.messageId, senderId: params.senderId, ...envelope },
+      lastMessage: {
+        id: params.messageId,
+        senderId: params.senderId,
+        ...envelope,
+        // Without it the preview would outlive the message: never shown as
+        // gone, and its ciphertext never stripped.
+        ...(params.expiresAt ? { expiresAt: Timestamp.fromDate(params.expiresAt) } : {}),
+      },
     });
   }
 
@@ -456,10 +488,9 @@ export async function latestVisibleMessage(
   const snapshot = await getDocs(
     query(collection(db(), 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE)),
   );
-  const entry = snapshot.docs.find((candidate) => {
-    const expiresAt = (candidate.data().expiresAt as Timestamp | undefined)?.toDate();
-    return !hidden.has(candidate.id) && !hasExpired({ expiresAt });
-  });
+  const entry = snapshot.docs.find(
+    (candidate) => !hidden.has(candidate.id) && !hasExpired({ expiresAt: asDate(candidate.data().expiresAt) }),
+  );
   return entry ? decrypt(entry, conversationKey) : null;
 }
 
@@ -475,6 +506,10 @@ export function subscribeMessages(
   onChange: (messages: DecryptedMessage[]) => void,
   onError?: (error: Error) => void,
 ) {
+  // Snapshots come in bursts (metadata changes too) and each decrypts
+  // asynchronously, some slower than others; only the newest may land, or an
+  // older one finishing late would put back a clock icon already gone.
+  let latest = 0;
   return onSnapshot(
     query(
       collection(db(), 'chats', chatId, 'messages'),
@@ -483,19 +518,31 @@ export function subscribeMessages(
     ),
     { includeMetadataChanges: true },
     (snapshot) => {
-      void Promise.all(snapshot.docs.map((entry) => decrypt(entry, conversationKey)))
-        .then((messages) => onChange(messages.reverse()));
+      const mine = ++latest;
+      Promise.all(snapshot.docs.map((entry) => decrypt(entry, conversationKey))).then(
+        (messages) => {
+          if (mine === latest) onChange(messages.reverse());
+        },
+        // libsodium failing to load, say: say so rather than spin forever.
+        (error: unknown) => {
+          if (mine === latest) onError?.(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
     },
     (error) => onError?.(error),
   );
 }
 
-/** Scroll-up pagination. Returns oldest-first, like the live page. */
+/**
+ * Scroll-up pagination. Messages come oldest-first, like the live page.
+ * `fromCache` is true when this came from the offline cache -- a short page
+ * then means "not cached", not "the start of the chat".
+ */
 export async function loadOlderMessages(
   chatId: string,
   conversationKey: Uint8Array,
   before: Date,
-): Promise<DecryptedMessage[]> {
+): Promise<{ messages: DecryptedMessage[]; fromCache: boolean }> {
   const snapshot = await getDocs(
     query(
       collection(db(), 'chats', chatId, 'messages'),
@@ -508,7 +555,7 @@ export async function loadOlderMessages(
   const messages = await Promise.all(
     snapshot.docs.map((entry) => decrypt(entry, conversationKey)),
   );
-  return messages.reverse();
+  return { messages: messages.reverse(), fromCache: snapshot.metadata.fromCache };
 }
 
 /** Decrypt a chat-list preview. */
@@ -516,7 +563,8 @@ export async function decryptPreview(
   lastMessage: ChatDoc['lastMessage'],
   conversationKey: Uint8Array | null,
 ): Promise<string | null> {
-  if (lastMessage?.expiresAt && lastMessage.expiresAt.toMillis() <= Date.now()) return EXPIRED_LABEL;
+  const expiresAt = timestampMs(lastMessage?.expiresAt);
+  if (expiresAt !== null && expiresAt <= Date.now()) return EXPIRED_LABEL;
   if (lastMessage?.deleted) return DELETED_LABEL;
   if (!lastMessage?.ciphertext || !lastMessage.nonce || !conversationKey) return null;
   return open({ ciphertext: lastMessage.ciphertext, nonce: lastMessage.nonce }, conversationKey);

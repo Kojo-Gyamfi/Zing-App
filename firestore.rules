@@ -299,8 +299,25 @@ service cloud.firestore {
                && !('createdAt' in changed)
                && (!('updatedAt' in changed) || request.resource.data.updatedAt == request.time)
                && (!('lastMessage' in changed)
-                   || request.resource.data.lastMessage.senderId == request.auth.uid
-                   || expiredPreviewCleared());
+                   || (previewShapeOk()
+                       && (request.resource.data.lastMessage.senderId == request.auth.uid
+                           || expiredPreviewCleared())));
+      }
+
+      // The preview's fields, each of the type the app writes. Both phones
+      // parse this doc for their chat list, so a value of the wrong type --
+      // a number where a timestamp belongs -- must never get in.
+      function previewShapeOk() {
+        let preview = request.resource.data.lastMessage;
+        return preview == null
+               || (preview is map
+                   && preview.keys().hasOnly(['id', 'senderId', 'ciphertext', 'nonce', 'deleted', 'expiresAt'])
+                   && preview.senderId is string
+                   && preview.get('id', '') is string
+                   && preview.get('ciphertext', '') is string
+                   && preview.get('nonce', '') is string
+                   && preview.get('deleted', false) is bool
+                   && (preview.get('expiresAt', null) == null || preview.expiresAt is timestamp));
       }
 
       // lastMessage / updatedAt / receipts / unread / sent / blocked may move;

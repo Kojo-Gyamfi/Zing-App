@@ -12,6 +12,8 @@ import {
   latestVisibleMessage,
   subscribeAllHidden,
   sweepExpiredMessages,
+  timestampMs,
+  DELETE_SLACK_MS,
   DELETED_LABEL,
 } from '@/lib/db/messages';
 import { isUnread, needsDeliveryReceipt } from '@/lib/receipts';
@@ -35,6 +37,23 @@ export type ChatListRow = {
 };
 
 const NO_HIDDEN = new Set<string>();
+
+/** A row for a chat whose doc could not be read: name if cached, no preview. */
+function fallbackRow(chat: ChatSummary, uid: string): ChatListRow {
+  const peerUid = chat.members?.find((member) => member !== uid) ?? null;
+  return {
+    id: chat.id,
+    peer: peerUid ? (useProfiles.getState().profiles[peerUid] ?? null) : null,
+    peerDeleted: false,
+    preview: null,
+    lastSenderId: null,
+    updatedAt: chat.updatedAt?.toDate?.() ?? null,
+    unread: false,
+    unreadCount: 0,
+    peerReadAt: null,
+    peerDeliveredAt: null,
+  };
+}
 
 /**
  * The chat list, decrypted.
@@ -125,8 +144,11 @@ export function useChatList() {
     let missingKey = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // Each row on its own: one chat with a malformed doc (a hand-rolled client
+    // can write odd values into fields it is allowed to touch) must cost that
+    // row its preview, not freeze the whole list on its spinner.
     void Promise.all(
-      chats.map(async (chat): Promise<ChatListRow> => {
+      chats.map((chat) => (async (): Promise<ChatListRow> => {
         const peerUid = chat.members.find((member) => member !== uid) ?? null;
         const [peer, key] = await Promise.all([
           peerUid ? loadProfile(peerUid) : Promise.resolve(null),
@@ -164,10 +186,11 @@ export function useChatList() {
         // A disappearing preview past its time loses its ciphertext. Either
         // member may do it; once per message per session.
         const last = chat.lastMessage;
+        const lastExpiry = timestampMs(last?.expiresAt);
         if (
           last?.ciphertext &&
-          last.expiresAt &&
-          last.expiresAt.toMillis() <= Date.now() &&
+          lastExpiry !== null &&
+          lastExpiry <= Date.now() - DELETE_SLACK_MS &&
           !chat.pending &&
           !clearedPreviews.current.has(`${chat.id}:${last.id}`)
         ) {
@@ -197,7 +220,7 @@ export function useChatList() {
           peerReadAt: peerUid ? (chat.lastRead?.[peerUid]?.toDate?.() ?? null) : null,
           peerDeliveredAt: peerUid ? (chat.lastDelivered?.[peerUid]?.toDate?.() ?? null) : null,
         };
-      }),
+      })().catch((): ChatListRow => fallbackRow(chat, uid))),
     ).then((next) => {
       if (current !== build.current) return;
       setRows(next);

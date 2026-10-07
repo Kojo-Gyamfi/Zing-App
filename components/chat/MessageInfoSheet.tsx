@@ -42,7 +42,7 @@ export function MessageInfoSheet({
         role="dialog"
         aria-label="Message info"
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-md space-y-4 rounded-t-3xl border-t border-line bg-surface p-5
+        className="max-h-[90dvh] w-full max-w-md overflow-y-auto scroll-thin space-y-4 rounded-t-3xl border-t border-line bg-surface p-5
           pb-[max(1.25rem,env(safe-area-inset-bottom))] md:rounded-3xl md:border"
       >
         <p className="text-[15px] font-semibold">Message info</p>

@@ -50,6 +50,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     messages,
     peer,
     peerDeleted,
+    unavailable,
     blockedByMe,
     blockedByPeer,
     setBlock,
@@ -245,6 +246,13 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     return sendText(text, context?.kind === 'reply' ? context.id : null);
   }
 
+  // Dialogs follow the message as it is now. One deleted for everyone, or
+  // expired, while its menu is open must not still be copied, forwarded or
+  // edited from the copy taken when the menu opened.
+  const menuMessage = menuFor ? (byId.get(menuFor.id) ?? null) : null;
+  const infoMessage = infoFor ? byId.get(infoFor.id) : undefined;
+  const forwardMessage = forwarding ? byId.get(forwarding.id) : undefined;
+
   return (
     <div className="flex h-dvh flex-col bg-void">
       {search !== null ? (
@@ -324,7 +332,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         </Link>
 
         <button
-          onClick={() => setInfoOpen(true)}
+          onClick={() => peer && setInfoOpen(true)}
           className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1 text-left"
         >
           <Avatar
@@ -384,7 +392,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           </p>
           <div className="flex shrink-0 gap-1">
             <button
-              onClick={() => setInfoOpen(true)}
+              onClick={() => peer && setInfoOpen(true)}
               className="h-8 rounded-full px-3 text-[13px] font-medium text-zing"
             >
               Verify
@@ -404,7 +412,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
       {disappearing > 0 && (
         <button
-          onClick={() => setInfoOpen(true)}
+          onClick={() => peer && setInfoOpen(true)}
           className="flex items-center justify-center gap-1.5 border-b border-line bg-surface px-4 py-1.5 text-[12px] text-muted"
         >
           <DisappearingIcon className="size-3.5 shrink-0" />
@@ -432,7 +440,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         // widen the scroller.
         className="chat-wallpaper min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto px-3 py-3 scroll-thin"
       >
-        {loading ? (
+        {unavailable ? (
+          <p className="px-10 py-16 text-center text-[14px] text-muted">
+            This chat isn&apos;t available. The link may be wrong, or the conversation isn&apos;t yours.
+          </p>
+        ) : loading ? (
           <div className="flex items-center justify-center gap-2 py-10 text-muted">
             <Spinner />
             <span className="text-sm">Decrypting</span>
@@ -441,7 +453,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           <FirstMessageHint name={peer?.displayName ?? 'them'} />
         ) : (
           groups.map((group) => (
-            <section key={group.label} className="space-y-1">
+            <section key={group.messages[0].id} className="space-y-1">
               <div className="sticky top-0 z-10 flex justify-center py-2">
                 <span className="rounded-full bg-elevated/90 px-3 py-1 text-[11px] text-muted backdrop-blur">
                   {group.label}
@@ -532,9 +544,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           onDraftChange={onDraftChange}
           onSend={handleSend}
           onTyping={ping}
-          disabled={peerDeleted || blockedByPeer || !conversationKey}
+          disabled={peerDeleted || blockedByPeer || unavailable || !conversationKey}
           disabledText={
-            peerDeleted
+            unavailable
+              ? "Can’t send here"
+              : peerDeleted
               ? 'This account was deleted'
               : blockedByPeer
                 ? 'You can’t send messages in this chat'
@@ -545,31 +559,31 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         />
       )}
 
-      {menuFor && (
+      {menuMessage && (
         <MessageMenu
-          message={menuFor}
-          mine={menuFor.senderId === user?.uid}
-          myReaction={(user && menuFor.reactions?.[user.uid]) || null}
-          starred={starredIds.has(menuFor.id)}
+          message={menuMessage}
+          mine={menuMessage.senderId === user?.uid}
+          myReaction={(user && menuMessage.reactions?.[user.uid]) || null}
+          starred={starredIds.has(menuMessage.id)}
           canReact={conversationKey !== null && !peerDeleted && !blockedByMe && !blockedByPeer}
-          onReply={() => replyTo(menuFor)}
+          onReply={() => replyTo(menuMessage)}
           onEdit={() =>
-            menuFor.text !== null &&
-            setComposerContext({ kind: 'edit', id: menuFor.id, text: menuFor.text })
+            menuMessage.text !== null &&
+            setComposerContext({ kind: 'edit', id: menuMessage.id, text: menuMessage.text })
           }
-          onDelete={() => deleteForEveryone(menuFor.id)}
-          onDeleteForMe={() => deleteForMe(menuFor.id)}
-          onReact={(emoji) => react(menuFor.id, emoji)}
-          onStar={(on) => toggleStar(menuFor.id, on)}
-          onForward={() => setForwarding(menuFor)}
-          onInfo={() => setInfoFor(menuFor)}
+          onDelete={() => deleteForEveryone(menuMessage.id)}
+          onDeleteForMe={() => deleteForMe(menuMessage.id)}
+          onReact={(emoji) => react(menuMessage.id, emoji)}
+          onStar={(on) => toggleStar(menuMessage.id, on)}
+          onForward={() => setForwarding(menuMessage)}
+          onInfo={() => setInfoFor(menuMessage)}
           onClose={() => setMenuFor(null)}
         />
       )}
 
-      {infoFor && (
+      {infoMessage && !infoMessage.deleted && (
         <MessageInfoSheet
-          message={infoFor}
+          message={infoMessage}
           peerName={peer?.displayName ?? 'They'}
           peerDeliveredAt={peerDeliveredAt}
           peerReadAt={peerReadAt}
@@ -577,13 +591,13 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         />
       )}
 
-      {forwarding?.text && user && (
+      {forwardMessage?.text && !forwardMessage.deleted && user && (
         <ForwardSheet
           me={user.uid}
-          preview={forwarding.text}
+          preview={forwardMessage.text}
           onClose={() => setForwarding(null)}
           onPick={async (target) => {
-            const ok = await forward(forwarding.text!, target);
+            const ok = await forward(forwardMessage.text!, target);
             if (ok) {
               setForwarding(null);
               if (target !== chatId) router.push(`/chats/${target}`);

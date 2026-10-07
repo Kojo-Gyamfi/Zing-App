@@ -28,7 +28,9 @@ export function trackPresence(uid: string): (markOffline?: boolean) => void {
     // connection dies without a clean close.
     void onDisconnect(status)
       .set({ online: false, lastSeen: serverTimestamp() })
-      .then(() => set(status, { online: true, lastSeen: serverTimestamp() }));
+      .then(() => set(status, { online: true, lastSeen: serverTimestamp() }))
+      // Dropped mid-handshake: the next reconnect runs this again.
+      .catch(() => undefined);
   });
 
   // markOffline false: the account is gone, there is no node left to write.
@@ -57,10 +59,11 @@ export function setTyping(chatId: string, uid: string, typing: boolean): void {
   if (typing) {
     // The server's clock, not this phone's: two phones' clocks can easily be
     // seconds apart, which would hide the indicator or keep it on.
-    void set(node, serverTimestamp());
-    void onDisconnect(node).remove();
+    // Throwaway signals: a failed write just means no indicator.
+    void set(node, serverTimestamp()).catch(() => undefined);
+    void onDisconnect(node).remove().catch(() => undefined);
   } else {
-    void remove(node);
+    void remove(node).catch(() => undefined);
   }
 }
 

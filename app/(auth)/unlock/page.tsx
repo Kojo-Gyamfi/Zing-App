@@ -56,27 +56,36 @@ export default function UnlockPage() {
   }
 
   async function unlock() {
+    if (busy) return;
     setError(null);
     setBusy(true);
 
-    // Argon2id is deliberately slow -- a second or two here is the cost that
-    // makes the stored backup useless to anyone brute-forcing it.
-    const privateKey = await unwrapPrivateKey(profile!.keyBackup, passphrase);
+    try {
+      // Argon2id is deliberately slow -- a second or two here is the cost that
+      // makes the stored backup useless to anyone brute-forcing it.
+      const privateKey = await unwrapPrivateKey(profile!.keyBackup, passphrase);
 
-    if (!privateKey) {
-      setError('That passphrase did not work.');
-      setBusy(false);
-      return;
-    }
-    if (!(await matchesPublicKey(privateKey, profile!.publicKey))) {
-      setError(MISMATCH);
-      setBusy(false);
-      return;
-    }
+      if (!privateKey) {
+        setError('That passphrase did not work.');
+        setBusy(false);
+        return;
+      }
+      if (!(await matchesPublicKey(privateKey, profile!.publicKey))) {
+        setError(MISMATCH);
+        setBusy(false);
+        return;
+      }
 
-    await saveIdentity(privateKey);
-    setIdentity({ privateKey, publicKey: await publicKeyFrom(privateKey) }, profile!);
-    router.replace(returnPath());
+      // Storage that will not keep the key still lets this session in; the
+      // passphrase is asked again next launch.
+      await saveIdentity(privateKey).catch(() => undefined);
+      setIdentity({ privateKey, publicKey: await publicKeyFrom(privateKey) }, profile!);
+      router.replace(returnPath());
+    } catch {
+      // libsodium failed to load (offline on a first visit, say).
+      setError('Could not unlock right now. Check your connection and try again.');
+      setBusy(false);
+    }
   }
 
   async function recover() {

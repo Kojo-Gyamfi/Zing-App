@@ -43,7 +43,7 @@ function admin(): App {
       clientEmail: credentials.client_email,
       // Vercel stores the JSON with escaped newlines; the PEM parser needs
       // real ones.
-      privateKey: credentials.private_key.replace(/\n/g, '\n'),
+      privateKey: credentials.private_key.replace(/\\n/g, '\n'),
     }),
   });
 

@@ -19,7 +19,21 @@ type Outcome = 'ok' | 'invalid-code' | 'expired' | 'too-many-attempts';
  * for the account that owns the address -- created on first use, and the
  * same account a Google sign-in with that address would reach.
  */
+/**
+ * Anything unexpected -- a missing secret or service account, Firestore
+ * unreachable -- answers 500 and is logged as ours, rather than escaping as
+ * an unexplained crash or being mistaken for the user's fault.
+ */
 export async function POST(request: Request) {
+  try {
+    return await handle(request);
+  } catch (cause) {
+    console.error('Email code: verifying a sign-in code failed', cause);
+    return NextResponse.json({ error: 'server-error' }, { status: 500 });
+  }
+}
+
+async function handle(request: Request) {
   let body: { email?: unknown; code?: unknown };
   try {
     body = await request.json();

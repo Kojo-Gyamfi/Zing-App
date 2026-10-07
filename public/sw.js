@@ -16,7 +16,22 @@
  * ciphertext.
  */
 
-const CACHE = 'zing-shell-v3';
+const CACHE = 'zing-shell-v4';
+
+// libsodium, loaded here at the top level on purpose. Browsers only allow
+// importScripts() while the worker is being installed; called later -- the
+// first time a push arrives -- it throws, and every notification would fall
+// back to "New message". Guarded so a missing file cannot stop the worker
+// from installing at all.
+//
+// The standard build, not sumo: this worker only opens sealed boxes and
+// secretboxes. It never derives a key from a passphrase, so it does not need
+// Argon2 and should not pay for it on every start.
+try {
+  self.importScripts('/vendor/libsodium.js', '/vendor/libsodium-wrappers.js');
+} catch {
+  // Previews fall back to "New message".
+}
 const SHELL = ['/', '/chats', '/offline', '/zing-logo-dark.png', '/zing-mark.png', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {
@@ -52,11 +67,28 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone();
-        void caches.open(CACHE).then((cache) => cache.put(request, copy));
+        // Only good pages are kept: a 500 or a redirect cached here would
+        // replace the working copy and be what offline users get.
+        if (response.ok && response.type === 'basic') {
+          const copy = response.clone();
+          event.waitUntil(
+            caches
+              .open(CACHE)
+              .then((cache) => cache.put(request, copy))
+              .catch(() => undefined),
+          );
+        }
         return response;
       })
-      .catch(async () => (await caches.match(request)) ?? (await caches.match('/chats')) ?? Response.error()),
+      // Offline: this page as last seen, else the app shell (which can open
+      // chats from Firestore's own cache), else the offline page.
+      .catch(
+        async () =>
+          (await caches.match(request)) ??
+          (await caches.match('/chats')) ??
+          (await caches.match('/offline')) ??
+          Response.error(),
+      ),
   );
 });
 
@@ -67,13 +99,14 @@ let sodiumReady = null;
 function loadSodium() {
   if (!sodiumReady) {
     sodiumReady = (async () => {
-      // The standard build, not sumo: this worker only opens sealed boxes and
-      // secretboxes. It never derives a key from a passphrase, so it does not
-      // need Argon2 and should not pay for it on every push.
-      self.importScripts('/vendor/libsodium.js', '/vendor/libsodium-wrappers.js');
+      if (!self.sodium) throw new Error('libsodium did not load');
       await self.sodium.ready;
       return self.sodium;
     })();
+    // Not cached when it fails, so the next push tries again.
+    sodiumReady.catch(() => {
+      sodiumReady = null;
+    });
   }
   return sodiumReady;
 }
@@ -83,16 +116,29 @@ function readRecord(store, key) {
   return new Promise((resolve) => {
     const open = indexedDB.open('zing');
 
+    // No database yet: do not create an empty one here -- the app owns its
+    // shape and version (lib/crypto/vault.ts).
+    open.onupgradeneeded = () => open.transaction?.abort();
     open.onerror = () => resolve(null);
     open.onsuccess = () => {
       const database = open.result;
+      // Closed after each read: a connection held open by this worker would
+      // block the app from ever upgrading the database.
+      const done = (value) => {
+        database.close();
+        resolve(value);
+      };
       if (!database.objectStoreNames.contains(store)) {
-        resolve(null);
+        done(null);
         return;
       }
-      const request = database.transaction(store, 'readonly').objectStore(store).get(key);
-      request.onsuccess = () => resolve(request.result ?? null);
-      request.onerror = () => resolve(null);
+      try {
+        const request = database.transaction(store, 'readonly').objectStore(store).get(key);
+        request.onsuccess = () => done(request.result ?? null);
+        request.onerror = () => done(null);
+      } catch {
+        done(null);
+      }
     };
   });
 }
@@ -197,14 +243,16 @@ self.addEventListener('notificationclick', (event) => {
   const target = `/chats/${event.notification.data?.chatId ?? ''}`;
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      // navigate() only works on a window this worker controls; for any
+      // other, it rejects and the tap would just focus the wrong page.
       for (const client of clients) {
-        if ('focus' in client) {
-          void client.navigate(target);
-          return client.focus();
-        }
+        if (!('navigate' in client)) continue;
+        const navigated = await client.navigate(target).catch(() => null);
+        if (navigated) return navigated.focus();
       }
       return self.clients.openWindow(target);
-    }),
+    })(),
   );
 });

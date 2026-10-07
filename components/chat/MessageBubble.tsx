@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { motion, useMotionValue, useTransform } from 'motion/react';
 import { bubbleTime } from '@/lib/format';
 import { DELETED_LABEL } from '@/lib/db/messages';
@@ -135,6 +135,9 @@ export function MessageBubble({
     clearTimeout(pressTimer.current);
     pressStart.current = null;
   }
+
+  // A bubble removed mid-press (deleted, expired) must not open a menu after.
+  useEffect(() => () => clearTimeout(pressTimer.current), []);
 
   // Swipe-to-reply needs something to quote; the menu only needs a real
   // message, so a "deleted" placeholder can still be deleted for me.

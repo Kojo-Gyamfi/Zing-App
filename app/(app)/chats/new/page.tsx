@@ -20,6 +20,7 @@ export default function NewChatPage() {
   const [searched, setSearched] = useState(false);
   const [searching, setSearching] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function search() {
     const query = term.trim();
@@ -27,23 +28,37 @@ export default function NewChatPage() {
 
     setSearching(true);
     setSearched(false);
+    setError(null);
 
-    // A leading + or digits means they typed a number; anything else is a handle.
-    const found = /^[+\d]/.test(query)
-      ? await findByPhone(query)
-      : await findByUsername(normalizeUsername(query));
+    try {
+      // A leading + or digits means they typed a number; anything else is a handle.
+      const found = /^[+\d]/.test(query)
+        ? await findByPhone(query)
+        : await findByUsername(normalizeUsername(query));
 
-    setResult(found && found.uid !== user?.uid ? found : null);
-    setSearched(true);
-    setSearching(false);
+      setResult(found && found.uid !== user?.uid ? found : null);
+      setSearched(true);
+    } catch {
+      // Offline with nothing cached: say so rather than spin forever.
+      setResult(null);
+      setError('Could not search. Check your connection and try again.');
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function start(peer: UserDoc) {
     if (!user || !identity) return;
 
     setStarting(true);
-    const chatId = await ensureDirectChat({ uid: user.uid, identity }, peer);
-    router.replace(`/chats/${chatId}`);
+    setError(null);
+    try {
+      const chatId = await ensureDirectChat({ uid: user.uid, identity }, peer);
+      router.replace(`/chats/${chatId}`);
+    } catch {
+      setError('Could not start the chat. Check your connection and try again.');
+      setStarting(false);
+    }
   }
 
   return (
@@ -92,6 +107,8 @@ export default function NewChatPage() {
             <span className="text-sm">Searching</span>
           </div>
         )}
+
+        {error && <p className="text-center text-[13px] text-danger">{error}</p>}
 
         {searched && !searching && result === null && (
           <p className="py-6 text-center text-[14px] text-muted">
