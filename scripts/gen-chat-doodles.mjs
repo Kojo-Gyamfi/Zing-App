@@ -1,9 +1,21 @@
-// Generates public/chat-doodles.svg: a seamless tile of scattered, rotated doodles.
+// Generates public/chat-doodles.svg: a seamless tile of scattered, rotated doodles,
+// plus one copy per tinted wallpaper (chat-doodles-ocean.svg, ...) with the accent
+// ink in that wallpaper's hue. Same layout in every tile; only the ink changes.
 // Run: node scripts/gen-chat-doodles.mjs   (change seed for a different scatter)
 import { writeFileSync } from 'node:fs';
 
 const TEAL = { stroke: '#00cfc1', opacity: 0.13 };
 const GREY = { stroke: '#8a9a9d', opacity: 0.11 };
+
+// Accent inks for the tinted wallpapers (app/globals.css mixes the same hues
+// into the background). A touch stronger than teal on the void, because the
+// doodles sit on a background of their own hue.
+const TINTS = {
+  ocean: { stroke: '#2f7fd8', opacity: 0.2 },
+  forest: { stroke: '#2e9b5f', opacity: 0.2 },
+  dusk: { stroke: '#8a5cd6', opacity: 0.2 },
+  sand: { stroke: '#b5832f', opacity: 0.22 },
+};
 
 // Each doodle: body drawn in original coordinates, plus its centre.
 const doodles = [
@@ -101,7 +113,7 @@ const defs = doodles
   .map((d) => `    <g id="${d.id}" transform="translate(${-d.c[0]} ${-d.c[1]})">${d.body}</g>`)
   .join('\n');
 
-const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${TILE}" height="${TILE}" viewBox="0 0 ${TILE} ${TILE}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2">
+const tile = (accent) => `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${TILE}" height="${TILE}" viewBox="0 0 ${TILE} ${TILE}" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2">
   <!-- Zing chat wallpaper: one repeating tile of line doodles, WhatsApp style.
        Generated: a staggered 6x6 lattice with each doodle jittered, tilted and
        resized, so nothing lines up in rows or columns. Doodles near an edge are
@@ -111,7 +123,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.
 ${defs}
     <g id="star">${STAR}</g>
   </defs>
-  <g stroke="${TEAL.stroke}" stroke-opacity="${TEAL.opacity}">
+  <g stroke="${accent.stroke}" stroke-opacity="${accent.opacity}">
     ${uses.teal.join('\n    ')}
   </g>
   <g stroke="${GREY.stroke}" stroke-opacity="${GREY.opacity}">
@@ -121,5 +133,9 @@ ${defs}
 </svg>
 `;
 
+const svg = tile(TEAL);
 writeFileSync(new URL('../public/chat-doodles.svg', import.meta.url), svg);
+for (const [name, ink] of Object.entries(TINTS)) {
+  writeFileSync(new URL(`../public/chat-doodles-${name}.svg`, import.meta.url), tile(ink));
+}
 console.log('bytes', svg.length, 'doodles', items.length, 'stars', stars.length);

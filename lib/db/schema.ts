@@ -1,6 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { KeyBackup } from '@/lib/crypto/types';
-import type { Appearance } from '@/lib/appearance';
+import type { Appearance, ChatTheme } from '@/lib/appearance';
 
 /**
  * Firestore document shapes.
@@ -40,14 +40,18 @@ export type AccountDoc = {
   pushTokens: string[];
   /** Chat ids shown at the top of the list, at most MAX_PINNED. */
   pinned?: string[];
-  /** Chat ids that get no push notifications. */
+  /** Chat ids that get no push notifications, for good. */
   muted?: string[];
+  /** Chats muted for a while (8 hours, 1 week): chat id -> when it ends. */
+  mutedUntil?: Record<string, Timestamp>;
   /** Chat ids moved out of the main list into "Archived". */
   archived?: string[];
   /** Chat ids under the "Favourites" filter of the chat list. */
   favourites?: string[];
   /** Theme and wallpaper, so they follow the user to a new phone. */
   appearance?: Partial<Appearance>;
+  /** Per-chat wallpaper and bubble colour, overriding `appearance`. */
+  chatThemes?: Record<string, ChatTheme>;
   /** What this user shows other people. A missing field means the default. */
   privacy?: Partial<Privacy>;
   /**
@@ -197,6 +201,12 @@ export const DISAPPEARING_OPTIONS = [0, 86_400, 604_800, 7_776_000] as const;
 export type MessageListDoc = {
   uid: string;
   ids: string[];
+  /**
+   * Hidden lists only: "Clear chat". Every message sent at or before this
+   * time is gone for this member, on all their devices. Only ever stamped
+   * with the server's clock (firestore.rules), so it cannot be moved back.
+   */
+  clearedAt?: Timestamp;
 };
 
 /** Longest reaction accepted, in UTF-16 units: one emoji with modifiers. */

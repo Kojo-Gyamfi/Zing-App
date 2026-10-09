@@ -11,6 +11,7 @@ import {
   editMessage,
   deleteMessage,
   hideMessage,
+  clearChat as clearChatFor,
   subscribeHidden,
   subscribeStarred,
   setStarred,
@@ -22,6 +23,7 @@ import {
   PAGE_SIZE,
 } from '@/lib/db/messages';
 import { withReaction } from '@/lib/reactions';
+import { isHidden, NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
 import {
   clearUnread,
   markRead,
@@ -66,12 +68,13 @@ export function useThread(chatId: string, peerUid: string | null) {
   const loadingOlder = useRef(false);
   const liveWindow = useRef<DecryptedMessage[]>([]);
 
-  // "Delete for me". Tagged with the chat it belongs to so a stale set from the
-  // previous chat never filters this one.
-  const [hidden, setHidden] = useState<{ chatId: string; ids: Set<string> }>({
+  // "Delete for me" and "Clear chat". Tagged with the chat it belongs to so a
+  // stale list from the previous chat never filters this one.
+  const [hidden, setHidden] = useState<{ chatId: string; list: HiddenList }>({
     chatId,
-    ids: new Set(),
+    list: NOTHING_HIDDEN,
   });
+  const clearedAt = hidden.chatId === chatId ? hidden.list.clearedAt : null;
 
   // A short-lived line above the composer for actions that fail after the fact.
   const [notice, setNotice] = useState<string | null>(null);
@@ -126,7 +129,7 @@ export function useThread(chatId: string, peerUid: string | null) {
 
   useEffect(() => {
     if (!user) return;
-    return subscribeHidden(chatId, user.uid, (ids) => setHidden({ chatId, ids }));
+    return subscribeHidden(chatId, user.uid, (list) => setHidden({ chatId, list }));
   }, [chatId, user]);
 
   // Starred, tagged with its chat like `hidden` above.
@@ -431,13 +434,15 @@ export function useThread(chatId: string, peerUid: string | null) {
 
       // Hide straight away; the listener confirms, and a refusal puts it back.
       setHidden((current) =>
-        current.chatId === chatId ? { chatId, ids: new Set(current.ids).add(id) } : current,
+        current.chatId === chatId
+          ? { chatId, list: { ...current.list, ids: new Set(current.list.ids).add(id) } }
+          : current,
       );
       hideMessage(chatId, user.uid, id).catch(() => {
         setHidden((current) => {
-          const ids = new Set(current.ids);
+          const ids = new Set(current.list.ids);
           ids.delete(id);
-          return { ...current, ids };
+          return { ...current, list: { ...current.list, ids } };
         });
         flash('Could not delete that message.');
       });
@@ -448,6 +453,23 @@ export function useThread(chatId: string, peerUid: string | null) {
     },
     [chatId, user, flash, starred],
   );
+
+  /**
+   * "Clear chat" for me: everything so far goes, here and on my other devices.
+   * Applied at once from this device's clock; the listener then brings the
+   * server's time, which is what other devices use. A refusal puts it back.
+   */
+  const clearChat = useCallback(() => {
+    if (!user) return;
+    const before = hidden.chatId === chatId ? hidden.list : NOTHING_HIDDEN;
+    setHidden({ chatId, list: { ids: new Set(), clearedAt: new Date() } });
+    setOlder([]);
+    setExhausted(false);
+    clearChatFor(chatId, user.uid).catch(() => {
+      setHidden({ chatId, list: before });
+      flash('Could not clear this chat.');
+    });
+  }, [chatId, user, hidden, flash]);
 
   /** React, change a reaction, or take it back (emoji null). */
   const react = useCallback(
@@ -551,7 +573,7 @@ export function useThread(chatId: string, peerUid: string | null) {
 
     loadingOlder.current = true;
     try {
-      const page = await loadOlderMessages(chatId, conversationKey, oldest);
+      const page = await loadOlderMessages(chatId, conversationKey, oldest, clearedAt);
       // A short page from the offline cache only means nothing more is
       // cached; marking the chat "fully loaded" then would stick after the
       // connection returns.
@@ -562,7 +584,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     } finally {
       loadingOlder.current = false;
     }
-  }, [chatId, conversationKey, older, messages, exhausted]);
+  }, [chatId, conversationKey, older, messages, exhausted, clearedAt]);
 
   // Clear typing if the tab goes away mid-sentence.
   useEffect(() => {
@@ -613,7 +635,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     }
   }, [chatId, older, messages, now]);
 
-  const hiddenIds = hidden.chatId === chatId ? hidden.ids : null;
+  const hiddenList = hidden.chatId === chatId ? hidden.list : NOTHING_HIDDEN;
   // An older page can overlap the live window at its edge (several messages
   // sharing a timestamp, or the window sliding as new ones arrive), so each
   // message appears once: the live copy wins, being the freshest.
@@ -625,7 +647,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     return true;
   });
   const thread = [...olderOnce, ...messages].filter(
-    (message) => !hiddenIds?.has(message.id) && !hasExpired(message, now),
+    (message) => !isHidden(message, hiddenList) && !hasExpired(message, now),
   );
   const failedHere = failed.filter(
     (entry) => entry.chatId === chatId && !thread.some((message) => message.id === entry.id),
@@ -666,6 +688,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     editText,
     deleteForEveryone,
     deleteForMe,
+    clearChat,
     react,
     starredIds: starred.chatId === chatId ? starred.ids : NO_IDS,
     toggleStar,

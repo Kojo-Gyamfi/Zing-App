@@ -351,9 +351,16 @@ service cloud.firestore {
       // collection-group query (see the match at the bottom).
       match /hidden/{uid} {
         allow read: if isSelf(uid) && request.auth.uid in chatMembers(chatId);
+        // clearedAt is "Clear chat" (lib/db/messages.ts clearChat): everything
+        // up to it is gone for this member. Only ever the server's "now", so it
+        // cannot be set back to bring cleared messages back, or forward to
+        // hide ones not yet sent.
         allow create, update: if isSelf(uid)
                               && request.auth.uid in chatMembers(chatId)
-                              && request.resource.data.get('uid', uid) == uid;
+                              && request.resource.data.get('uid', uid) == uid
+                              && (request.resource.data.get('clearedAt', null)
+                                    == (resource == null ? null : resource.data.get('clearedAt', null))
+                                  || request.resource.data.get('clearedAt', null) == request.time);
         // No membership lookup: account deletion removes every list in one
         // batch, and a get() per list would exceed the rules' read budget.
         allow delete: if isSelf(uid);

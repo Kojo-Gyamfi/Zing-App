@@ -131,10 +131,13 @@ input:-webkit-autofill {
    down to 180px so each doodle lands around 20px, WhatsApp's scale. The tile
    comes from scripts/gen-chat-doodles.mjs -- edit that, not the SVG. Its inks
    are faint enough to sit on either theme. The tints are mixed into the
-   theme's canvas, so each one follows light and dark on its own.
+   theme's canvas, so each one follows light and dark on its own, and each
+   carries the same doodles drawn in its own hue (chat-doodles-<name>.svg,
+   from the same script). Plain is the one with no doodles.
 
    Each choice is an attribute selector rather than :root only, so a Settings
-   swatch can carry its own data-wallpaper and preview it. */
+   swatch -- or one chat with a wallpaper of its own -- can carry its own
+   data-wallpaper. */
 @utility chat-wallpaper {
   background-color: var(--wallpaper-color);
   background-image: var(--wallpaper-image);
@@ -151,13 +154,37 @@ input:-webkit-autofill {
 }
 [data-wallpaper='ocean'] {
   --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #2f7fd8);
+  --wallpaper-image: url('/chat-doodles-ocean.svg');
 }
 [data-wallpaper='forest'] {
   --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #2e9b5f);
+  --wallpaper-image: url('/chat-doodles-forest.svg');
 }
 [data-wallpaper='dusk'] {
   --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #8a5cd6);
+  --wallpaper-image: url('/chat-doodles-dusk.svg');
 }
 [data-wallpaper='sand'] {
   --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #c79a4a);
+  --wallpaper-image: url('/chat-doodles-sand.svg');
+}
+
+/* One chat's outgoing-bubble colour (lib/appearance.ts BUBBLES), set on the
+   thread. Mixed into the incoming bubble, so it is a deep shade in dark mode
+   and a pale one in light, and the ink keeps its contrast in both. Teal is
+   the app's own colour: no attribute at all. */
+[data-bubble='blue'] {
+  --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #2f7fd8);
+}
+[data-bubble='green'] {
+  --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #2e9b5f);
+}
+[data-bubble='purple'] {
+  --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #8a5cd6);
+}
+[data-bubble='rose'] {
+  --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #d6537a);
+}
+[data-bubble='amber'] {
+  --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #d99a2b);
 }

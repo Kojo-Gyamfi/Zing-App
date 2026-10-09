@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, type Timestamp } from 'firebase-admin/firestore';
 import { adminAuth, adminDb, adminMessaging } from '@/lib/firebase/admin';
 
 export const runtime = 'nodejs';
@@ -95,7 +95,10 @@ export async function POST(request: Request) {
     // Muted: no push at all. Leaving it to the service worker to stay quiet
     // is not an option -- browsers expect every push to show something, and
     // revoke the subscription of a worker that keeps showing nothing.
+    // "Always" is the muted list; 8 hours / 1 week is mutedUntil (lib/mute.ts).
     if (((doc.data()?.muted ?? []) as string[]).includes(chatId)) return [];
+    const until = doc.data()?.mutedUntil?.[chatId] as Timestamp | undefined;
+    if (until && until.toMillis() > Date.now()) return [];
     const tokens = (doc.data()?.pushTokens ?? []) as string[];
     // doc is users/{uid}/private/account, so the uid is two levels up.
     return tokens.map((token) => ({ uid: doc.ref.parent.parent!.id, token }));

@@ -24,6 +24,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
 import { seal, open } from '@/lib/crypto/envelope';
+import { NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
 import type { Envelope } from '@/lib/crypto/types';
 import {
   MAX_MESSAGE_LENGTH,
@@ -351,15 +352,25 @@ export const DELETED_LABEL = 'This message was deleted';
  */
 const hiddenRef = (chatId: string, uid: string) => doc(db(), 'chats', chatId, 'hidden', uid);
 
+function toHiddenList(data: Partial<MessageListDoc> | undefined): HiddenList {
+  return {
+    ids: new Set(data?.ids ?? []),
+    clearedAt: data?.clearedAt instanceof Timestamp ? data.clearedAt.toDate() : null,
+  };
+}
+
 export function subscribeHidden(
   chatId: string,
   uid: string,
-  onChange: (ids: Set<string>) => void,
+  onChange: (hidden: HiddenList) => void,
 ) {
   return onSnapshot(
     hiddenRef(chatId, uid),
     (snapshot) => {
-      onChange(new Set((snapshot.data()?.ids as string[] | undefined) ?? []));
+      // A pending clearedAt reads as "now" rather than null, so a cleared
+      // chat empties at once instead of after the server answers.
+      const data = snapshot.data({ serverTimestamps: 'estimate' }) as Partial<MessageListDoc> | undefined;
+      onChange(toHiddenList(data));
       // Lists written before they named their owner are invisible to
       // subscribeAllHidden; stamp them the first time they are seen.
       if (snapshot.exists() && !snapshot.metadata.fromCache && snapshot.data().uid !== uid) {
@@ -367,8 +378,25 @@ export function subscribeHidden(
       }
     },
     // Rules not deployed yet, or offline with nothing cached: hide nothing.
-    () => onChange(new Set()),
+    () => onChange(NOTHING_HIDDEN),
   );
+}
+
+/**
+ * "Clear chat", for this member only: every message so far is gone from their
+ * account on every device, as on WhatsApp. The other person keeps theirs, and
+ * the messages themselves are untouched -- they are the other person's too.
+ *
+ * One stamp of the server's clock rather than a list of ids, so it costs one
+ * write however long the chat is, and the rules only accept "now", so it
+ * cannot be wound back. Single hides before it are covered by it, so the list
+ * starts again empty. Stars in the chat go too: they would point at nothing.
+ */
+export async function clearChat(chatId: string, uid: string): Promise<void> {
+  const batch = writeBatch(db());
+  batch.set(hiddenRef(chatId, uid), { uid, ids: [], clearedAt: serverTimestamp() });
+  batch.delete(starredRef(chatId, uid));
+  await batch.commit();
 }
 
 export async function hideMessage(chatId: string, uid: string, messageId: string): Promise<void> {
@@ -457,7 +485,7 @@ export async function loadStarredMessages(
  * the chat list needs them so a hidden newest message is not the preview.
  * Keyed by chat id.
  */
-export function subscribeAllHidden(uid: string, onChange: (hidden: Map<string, Set<string>>) => void) {
+export function subscribeAllHidden(uid: string, onChange: (hidden: Map<string, HiddenList>) => void) {
   return onSnapshot(
     query(collectionGroup(db(), 'hidden'), where('uid', '==', uid)),
     (snapshot) => {
@@ -465,7 +493,7 @@ export function subscribeAllHidden(uid: string, onChange: (hidden: Map<string, S
         new Map(
           snapshot.docs.map((entry) => [
             entry.ref.parent.parent!.id,
-            new Set((entry.data().ids as string[] | undefined) ?? []),
+            toHiddenList(entry.data({ serverTimestamps: 'estimate' }) as Partial<MessageListDoc>),
           ]),
         ),
       );
@@ -482,14 +510,20 @@ export function subscribeAllHidden(uid: string, onChange: (hidden: Map<string, S
 export async function latestVisibleMessage(
   chatId: string,
   conversationKey: Uint8Array | null,
-  hidden: Set<string>,
+  hidden: HiddenList,
 ): Promise<DecryptedMessage | null> {
   if (!conversationKey) return null;
   const snapshot = await getDocs(
-    query(collection(db(), 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE)),
+    query(
+      collection(db(), 'chats', chatId, 'messages'),
+      ...(hidden.clearedAt ? [where('createdAt', '>', hidden.clearedAt)] : []),
+      orderBy('createdAt', 'desc'),
+      limit(PAGE_SIZE),
+    ),
   );
   const entry = snapshot.docs.find(
-    (candidate) => !hidden.has(candidate.id) && !hasExpired({ expiresAt: asDate(candidate.data().expiresAt) }),
+    (candidate) =>
+      !hidden.ids.has(candidate.id) && !hasExpired({ expiresAt: asDate(candidate.data().expiresAt) }),
   );
   return entry ? decrypt(entry, conversationKey) : null;
 }
@@ -542,10 +576,13 @@ export async function loadOlderMessages(
   chatId: string,
   conversationKey: Uint8Array,
   before: Date,
+  /** "Clear chat": nothing at or before this is wanted, so it is not fetched. */
+  after: Date | null = null,
 ): Promise<{ messages: DecryptedMessage[]; fromCache: boolean }> {
   const snapshot = await getDocs(
     query(
       collection(db(), 'chats', chatId, 'messages'),
+      ...(after ? [where('createdAt', '>', after)] : []),
       orderBy('createdAt', 'desc'),
       startAfter(before),
       limit(PAGE_SIZE),

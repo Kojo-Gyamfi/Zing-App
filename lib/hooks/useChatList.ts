@@ -16,6 +16,7 @@ import {
   DELETE_SLACK_MS,
   DELETED_LABEL,
 } from '@/lib/db/messages';
+import { NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
 import { isUnread, needsDeliveryReceipt } from '@/lib/receipts';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -36,7 +37,6 @@ export type ChatListRow = {
   peerDeliveredAt: Date | null;
 };
 
-const NO_HIDDEN = new Set<string>();
 
 /** A row for a chat whose doc could not be read: name if cached, no preview. */
 function fallbackRow(chat: ChatSummary, uid: string): ChatListRow {
@@ -79,7 +79,7 @@ export function useChatList() {
 
   // The two live inputs. Rows are rebuilt whenever either changes.
   const [chats, setChats] = useState<ChatSummary[] | null>(null);
-  const [hidden, setHidden] = useState<Map<string, Set<string>>>(new Map());
+  const [hidden, setHidden] = useState<Map<string, HiddenList>>(new Map());
 
   // chatId -> the updatedAt we already sent a delivery receipt for. See below.
   const acknowledged = useRef(new Map<string, number>());
@@ -211,7 +211,7 @@ export function useChatList() {
           id: chat.id,
           peer,
           peerDeleted: peerUid ? Boolean(useProfiles.getState().missing[peerUid]) : false,
-          preview: await previewFor(chat, key, hidden.get(chat.id) ?? NO_HIDDEN),
+          preview: await previewFor(chat, key, hidden.get(chat.id) ?? NOTHING_HIDDEN, updatedAt),
           lastSenderId: chat.lastMessage?.senderId ?? null,
           updatedAt,
           unread,
@@ -235,17 +235,26 @@ export function useChatList() {
 
     /**
      * The newest message's preview, unless I deleted it for me -- then the
-     * newest one I did not hide, fetched once and remembered.
+     * newest one I did not hide, fetched once and remembered. Nothing at all
+     * for a chat I cleared that has had no message since: its newest message
+     * bumped updatedAt, so a clear after that covers it.
      */
-    async function previewFor(chat: ChatSummary, key: Uint8Array | null, hiddenIds: Set<string>) {
+    async function previewFor(
+      chat: ChatSummary,
+      key: Uint8Array | null,
+      hiddenList: HiddenList,
+      updatedAt: Date | null,
+    ) {
+      const { clearedAt } = hiddenList;
+      if (clearedAt && updatedAt && updatedAt.getTime() <= clearedAt.getTime()) return '';
       const newestId = chat.lastMessage?.id;
-      if (!newestId || !hiddenIds.has(newestId)) return decryptPreview(chat.lastMessage, key);
+      if (!newestId || !hiddenList.ids.has(newestId)) return decryptPreview(chat.lastMessage, key);
 
-      const cacheKey = `${chat.id}:${newestId}:${hiddenIds.size}`;
+      const cacheKey = `${chat.id}:${newestId}:${hiddenList.ids.size}:${clearedAt?.getTime() ?? 0}`;
       const cached = fallbackPreviews.current.get(cacheKey);
       if (cached !== undefined) return cached;
 
-      const visible = await latestVisibleMessage(chat.id, key, hiddenIds).catch(() => null);
+      const visible = await latestVisibleMessage(chat.id, key, hiddenList).catch(() => null);
       const text = visible ? (visible.deleted ? DELETED_LABEL : (visible.text ?? '')) : '';
       fallbackPreviews.current.set(cacheKey, text);
       return text;

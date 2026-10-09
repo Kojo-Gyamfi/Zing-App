@@ -70,3 +70,42 @@ export function storedAppearance(): Appearance {
     return DEFAULT_APPEARANCE;
   }
 }
+
+/**
+ * Per-chat theme: a wallpaper and an outgoing-bubble colour for one
+ * conversation, overriding the defaults above. Kept on the owner's account
+ * doc (chatThemes.{chatId}) -- the other person never sees it. Teal is the
+ * app's own bubble colour, so it needs no attribute; the rest are
+ * data-bubble values in app/globals.css.
+ */
+export const BUBBLES = ['teal', 'blue', 'green', 'purple', 'rose', 'amber'] as const;
+export type BubbleColor = (typeof BUBBLES)[number];
+
+export type ChatTheme = { wallpaper?: Wallpaper; bubble?: BubbleColor };
+
+/** Swatch colours for the bubble picker, matching the hues in globals.css. */
+export const BUBBLE_SWATCHES: Record<BubbleColor, string> = {
+  teal: '#00cfc1',
+  blue: '#2f7fd8',
+  green: '#2e9b5f',
+  purple: '#8a5cd6',
+  rose: '#d6537a',
+  amber: '#d99a2b',
+};
+
+/** The chatThemes map from Firestore, with anything unrecognised dropped. */
+export function toChatThemes(value: unknown): Record<string, ChatTheme> {
+  if (!value || typeof value !== 'object') return {};
+  const themes: Record<string, ChatTheme> = {};
+  for (const [chatId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const { wallpaper, bubble } = raw as Record<string, unknown>;
+    const theme: ChatTheme = {};
+    if ((WALLPAPERS as readonly string[]).includes(wallpaper as string)) {
+      theme.wallpaper = wallpaper as Wallpaper;
+    }
+    if ((BUBBLES as readonly string[]).includes(bubble as string)) theme.bubble = bubble as BubbleColor;
+    if (theme.wallpaper || theme.bubble) themes[chatId] = theme;
+  }
+  return themes;
+}

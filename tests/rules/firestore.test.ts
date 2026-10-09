@@ -436,6 +436,42 @@ describe('"Delete for me" lists', () => {
   });
 });
 
+describe('clear chat', () => {
+  const mine = () => doc(as('alice'), 'chats', CHAT, 'hidden', 'alice');
+
+  it('is stamped with the server clock, by the owner only', async () => {
+    await assertSucceeds(setDoc(mine(), { uid: 'alice', ids: [], clearedAt: serverTimestamp() }));
+    await assertFails(
+      setDoc(doc(as('bob'), 'chats', CHAT, 'hidden', 'alice'), {
+        uid: 'alice',
+        ids: [],
+        clearedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('cannot be back-dated, pushed forward, or taken away to undo it', async () => {
+    await assertFails(setDoc(mine(), { uid: 'alice', ids: [], clearedAt: new Date(2000, 0, 1) }));
+    await assertFails(setDoc(mine(), { uid: 'alice', ids: [], clearedAt: new Date(2100, 0, 1) }));
+
+    await setDoc(mine(), { uid: 'alice', ids: [], clearedAt: serverTimestamp() });
+    await assertFails(setDoc(mine(), { uid: 'alice', ids: [] }));
+    await assertFails(setDoc(mine(), { clearedAt: new Date(2000, 0, 1) }, { merge: true }));
+    // Hiding single messages afterwards leaves the clear as it is.
+    await assertSucceeds(setDoc(mine(), { uid: 'alice', ids: ['m1'] }, { merge: true }));
+    // Clearing again moves it to the new now.
+    await assertSucceeds(setDoc(mine(), { uid: 'alice', ids: [], clearedAt: serverTimestamp() }));
+  });
+
+  it('goes with the starred list in one batch, as the app writes it', async () => {
+    const alice = as('alice');
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'chats', CHAT, 'hidden', 'alice'), { uid: 'alice', ids: [], clearedAt: serverTimestamp() });
+    batch.delete(doc(alice, 'chats', CHAT, 'starred', 'alice'));
+    await assertSucceeds(batch.commit());
+  });
+});
+
 describe('starred lists', () => {
   it('belong to their owner only', async () => {
     const mine = doc(as('alice'), 'chats', CHAT, 'starred', 'alice');
@@ -464,6 +500,8 @@ describe('chat preferences', () => {
       archived: [],
       favourites: [CHAT],
       appearance: { theme: 'light', wallpaper: 'ocean' },
+      mutedUntil: { [CHAT]: Timestamp.fromMillis(Date.now() + 8 * 60 * 60 * 1000) },
+      chatThemes: { [CHAT]: { wallpaper: 'forest', bubble: 'rose' } },
     };
     await assertSucceeds(setDoc(doc(as('alice'), 'users/alice/private/account'), prefs, { merge: true }));
     await assertFails(getDoc(doc(as('bob'), 'users/alice/private/account')));

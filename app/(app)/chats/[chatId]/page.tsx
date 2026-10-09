@@ -23,12 +23,20 @@ import { summarizeReactions } from '@/lib/reactions';
 import { draftFor, useDrafts } from '@/lib/store/drafts';
 import { MessageInfoSheet } from '@/components/chat/MessageInfoSheet';
 import { DisappearingIcon, disappearingLabel } from '@/components/chat/Disappearing';
+import { ChatMenu } from '@/components/chat/ChatMenu';
+import { useChatPrefs } from '@/lib/hooks/useChatPrefs';
+import { useMuteClock } from '@/lib/hooks/useMuteClock';
+import { useAccount } from '@/lib/store/account';
+import { setChatPref, setChatTheme, setMute } from '@/lib/db/prefs';
+import { muteLabel } from '@/lib/mute';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
   const { user } = useSession();
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
+  // The ⋮ menu: everything that acts on the chat as a whole.
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<DecryptedMessage | null>(null);
   const [forwarding, setForwarding] = useState<DecryptedMessage | null>(null);
   const [infoFor, setInfoFor] = useState<DecryptedMessage | null>(null);
@@ -64,6 +72,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     editText,
     deleteForEveryone,
     deleteForMe,
+    clearChat,
     react,
     starredIds,
     toggleStar,
@@ -77,6 +86,12 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     peerReadAt,
     peerDeliveredAt,
   } = useThread(chatId, peerUid);
+
+  // This user's own settings for the chat, from the one account listener.
+  const prefs = useChatPrefs(user?.uid);
+  const muteNow = useMuteClock(prefs);
+  const chatTheme = useAccount((state) => state.settings.chatThemes[chatId]) ?? NO_THEME;
+  const defaultWallpaper = useAccount((state) => state.settings.appearance.wallpaper);
 
   // Unsent text survives leaving the chat, on this device only.
   const uid = user?.uid;
@@ -254,7 +269,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const forwardMessage = forwarding ? byId.get(forwarding.id) : undefined;
 
   return (
-    <div className="flex h-dvh flex-col bg-void">
+    // A bubble colour of this chat's own, if it has one (app/globals.css).
+    <div className="flex h-dvh flex-col bg-void" data-bubble={chatTheme.bubble}>
       {search !== null ? (
         <header className="flex items-center gap-1 border-b border-line bg-surface px-2 pt-safe">
           <button
@@ -364,11 +380,24 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         <button
           onClick={() => setSearch('')}
           aria-label="Search this chat"
-          className="mr-1 grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink"
+          className="grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink"
         >
           <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
             <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.9" />
             <path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          </svg>
+        </button>
+
+        <button
+          onClick={() => setChatMenuOpen(true)}
+          aria-label="Chat options"
+          aria-haspopup="dialog"
+          className="mr-1 grid size-10 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-elevated hover:text-ink"
+        >
+          <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+            <circle cx="12" cy="5.5" r="1.7" fill="currentColor" />
+            <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+            <circle cx="12" cy="18.5" r="1.7" fill="currentColor" />
           </svg>
         </button>
       </header>
@@ -439,6 +468,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         // overflow-x-hidden: a bubble dragged for swipe-to-reply must not
         // widen the scroller.
         className="chat-wallpaper min-h-0 flex-1 space-y-1 overflow-x-hidden overflow-y-auto px-3 py-3 scroll-thin"
+        // This chat's own wallpaper, or the one from Settings.
+        data-wallpaper={chatTheme.wallpaper ?? defaultWallpaper}
       >
         {unavailable ? (
           <p className="px-10 py-16 text-center text-[14px] text-muted">
@@ -619,9 +650,44 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           onClose={() => setInfoOpen(false)}
         />
       )}
+
+      {chatMenuOpen && user && (
+        <ChatMenu
+          name={peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Chat')}
+          canBlock={Boolean(peer) && !peerDeleted}
+          blocked={blockedByMe}
+          muteStatus={muteLabel(prefs, chatId, muteNow)}
+          disappearing={disappearing}
+          theme={chatTheme}
+          defaultWallpaper={defaultWallpaper}
+          pinned={prefs.pinned.includes(chatId)}
+          pinnedCount={prefs.pinned.filter((id) => !prefs.archived.includes(id)).length}
+          favourite={prefs.favourites.includes(chatId)}
+          archived={prefs.archived.includes(chatId)}
+          onContactInfo={peer ? () => setInfoOpen(true) : undefined}
+          onMute={(duration) => void setMute(user.uid, chatId, duration).catch(() => undefined)}
+          // Can't change it across a block: the rules keep the chat frozen.
+          onDisappearing={blockedByMe || blockedByPeer ? undefined : setDisappearing}
+          onTheme={(patch) => void setChatTheme(user.uid, chatId, patch).catch(() => undefined)}
+          onPin={(on) => void setChatPref(user.uid, 'pinned', chatId, on).catch(() => undefined)}
+          onFavourite={(on) =>
+            void setChatPref(user.uid, 'favourites', chatId, on).catch(() => undefined)
+          }
+          onArchive={(on) => void setChatPref(user.uid, 'archived', chatId, on).catch(() => undefined)}
+          onBlock={setBlock}
+          onClear={() => {
+            clearChat();
+            setComposerContext(null);
+          }}
+          onCloseChat={() => router.push('/chats')}
+          onClose={() => setChatMenuOpen(false)}
+        />
+      )}
     </div>
   );
 }
+
+const NO_THEME = {};
 
 function FirstMessageHint({ name }: { name: string }) {
   return (

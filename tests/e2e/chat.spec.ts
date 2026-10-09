@@ -242,6 +242,7 @@ test('two people chat end to end, and history survives a new device', async ({ b
   const row = () => bob.getByRole('link', { name: new RegExp(aliceHandle) });
   await row().dispatchEvent('contextmenu');
   await bob.getByRole('button', { name: 'Mute notifications' }).click();
+  await bob.getByRole('button', { name: 'Always' }).click();
   await expect(row().getByRole('img', { name: 'Muted' })).toBeVisible();
   await row().dispatchEvent('contextmenu');
   await bob.getByRole('button', { name: 'Archive chat' }).click();
@@ -403,4 +404,86 @@ test('formatting, chat filters and light mode', async ({ browser }) => {
 
   // It follows the account: Erin's phone is untouched, still dark.
   await expect(erin.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+test('the chat menu: mute, theme, disappearing, clear and close', async ({ browser }) => {
+  const gina = await newPhone(browser);
+  const hank = await newPhone(browser);
+  const ginaHandle = `gina_${run}`;
+  const hankHandle = `hank_${run}`;
+
+  await signInWithGoogle(gina, ginaHandle);
+  await onboard(gina, ginaHandle);
+  await signInWithGoogle(hank, hankHandle);
+  await onboard(hank, hankHandle);
+
+  await gina.getByRole('link', { name: 'New chat' }).click();
+  await gina.getByLabel('Find someone').fill(`@${hankHandle}`);
+  await gina.getByRole('button', { name: 'Find' }).click();
+  await gina.getByRole('button', { name: 'Chat' }).click();
+  await send(gina, 'first one');
+  await send(gina, 'second one');
+  await expect(hank.getByLabel('2 unread')).toBeVisible();
+
+  const thread = gina.getByRole('main');
+  const menu = gina.getByRole('dialog');
+  const openMenuOf = () => thread.getByRole('button', { name: 'Chat options' }).click();
+  // Tapping outside a sheet closes it; the top of the screen is backdrop.
+  const closeSheet = () => gina.mouse.click(20, 20);
+
+  // Mute for 8 hours: the menu says so, and the list shows the bell.
+  await openMenuOf();
+  await menu.getByRole('button', { name: /Mute notifications/ }).click();
+  await menu.getByRole('button', { name: '8 hours' }).click();
+  await expect(menu.getByRole('button', { name: /^Muted Muted until/ })).toBeVisible();
+
+  // A theme of this chat's own, applied behind the sheet at once.
+  await menu.getByRole('button', { name: /Chat theme & wallpaper/ }).click();
+  await menu.getByRole('radio', { name: 'Forest' }).click();
+  await menu.getByRole('radio', { name: 'Rose' }).click();
+  await closeSheet();
+  await expect(gina.locator('.chat-wallpaper')).toHaveAttribute('data-wallpaper', 'forest');
+  await expect(gina.locator('[data-bubble="rose"]')).toHaveCount(1);
+
+  // Disappearing messages from the menu: both phones get the banner.
+  await openMenuOf();
+  await menu.getByRole('button', { name: /Disappearing messages/ }).click();
+  await menu.getByRole('radio', { name: '24h' }).click();
+  await closeSheet();
+  await expect(gina.getByText(/New messages disappear 24 hours after/)).toBeVisible();
+  await openMenuOf();
+  await menu.getByRole('button', { name: /Disappearing messages/ }).click();
+  await menu.getByRole('radio', { name: 'Off' }).click();
+  await closeSheet();
+
+  // Clear chat asks first, then empties the chat for Gina only -- for good.
+  await openMenuOf();
+  await menu.getByRole('button', { name: /Clear chat/ }).click();
+  const confirm = gina.getByRole('alertdialog', { name: 'Clear this chat?' });
+  await expect(confirm).toContainText('can’t be undone');
+  await confirm.getByRole('button', { name: 'Clear chat' }).click();
+  await expect(thread.getByText('first one')).toHaveCount(0);
+  await expect(thread.getByText('second one')).toHaveCount(0);
+  await gina.reload();
+  await expect(thread.getByRole('textbox', { name: /Message/ }).or(gina.getByPlaceholder('Message'))).toBeVisible();
+  await expect(thread.getByText('first one')).toHaveCount(0);
+  await hank.locator('li').getByText(ginaHandle).click();
+  await expect(hank.getByRole('main').getByText('first one')).toBeVisible();
+  // New messages after the clear show as normal.
+  await send(gina, 'after the clear');
+  await expect(thread.getByText('after the clear')).toBeVisible();
+
+  // "Close chat" is for wide screens; a phone has Back.
+  await openMenuOf();
+  await expect(menu.getByRole('button', { name: 'Close chat' })).toBeHidden();
+  await closeSheet();
+  await gina.setViewportSize({ width: 1280, height: 800 });
+  await openMenuOf();
+  await menu.getByRole('button', { name: 'Close chat' }).click();
+  await expect(gina).toHaveURL(/\/chats$/);
+  await expect(gina.getByText('Pick a conversation to start reading.')).toBeVisible();
+  // The muted chat keeps its bell in the list, and its preview is the new message.
+  const row = gina.locator('li').filter({ hasText: hankHandle });
+  await expect(row.getByRole('img', { name: 'Muted' })).toBeVisible();
+  await expect(row.getByText('after the clear')).toBeVisible();
 });

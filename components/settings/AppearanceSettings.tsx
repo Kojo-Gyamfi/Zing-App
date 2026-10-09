@@ -3,22 +3,14 @@
 import { useState } from 'react';
 import { useAccount } from '@/lib/store/account';
 import { setAppearance } from '@/lib/db/prefs';
-import { WALLPAPERS, type ThemeChoice, type Wallpaper } from '@/lib/appearance';
+import type { ThemeChoice, Wallpaper } from '@/lib/appearance';
+import { WallpaperPicker } from './WallpaperPicker';
 
 const THEMES: { value: ThemeChoice; label: string }[] = [
   { value: 'system', label: 'System' },
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
 ];
-
-const WALLPAPER_NAMES: Record<Wallpaper, string> = {
-  doodles: 'Doodles',
-  plain: 'Plain',
-  ocean: 'Ocean',
-  forest: 'Forest',
-  dusk: 'Dusk',
-  sand: 'Sand',
-};
 
 /**
  * Theme and chat wallpaper. Saved on the account doc, so they follow this
@@ -69,35 +61,11 @@ export function AppearanceSettings({ uid }: { uid: string }) {
 
         <div className="space-y-2.5 p-4">
           <p className="text-[14px] font-medium text-ink">Chat wallpaper</p>
-          <div role="radiogroup" aria-label="Chat wallpaper" className="grid grid-cols-3 gap-2">
-            {WALLPAPERS.map((choice) => (
-              <button
-                key={choice}
-                role="radio"
-                aria-checked={wallpaper === choice}
-                disabled={!known}
-                onClick={() => wallpaper !== choice && save({ wallpaper: choice })}
-                className={`overflow-hidden rounded-xl border-2 text-left transition-colors disabled:opacity-50
-                  ${wallpaper === choice ? 'border-zing' : 'border-line hover:border-muted'}`}
-              >
-                {/* A miniature thread on that wallpaper: one bubble each way. */}
-                <span
-                  data-wallpaper={choice}
-                  className="chat-wallpaper flex h-16 flex-col justify-center gap-1 px-2"
-                  aria-hidden="true"
-                >
-                  <span className="h-2.5 w-3/5 rounded-full bg-bubble-in" />
-                  <span className="h-2.5 w-1/2 self-end rounded-full bg-bubble-out" />
-                </span>
-                <span
-                  className={`block px-2 py-1.5 text-[12px] font-medium
-                    ${wallpaper === choice ? 'text-zing' : 'text-muted'}`}
-                >
-                  {WALLPAPER_NAMES[choice]}
-                </span>
-              </button>
-            ))}
-          </div>
+          <WallpaperPicker
+            value={wallpaper}
+            disabled={!known}
+            onChange={(choice) => choice && save({ wallpaper: choice })}
+          />
         </div>
       </div>
 

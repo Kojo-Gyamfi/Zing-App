@@ -7,7 +7,9 @@ import { useChatList, type ChatListRow } from '@/lib/hooks/useChatList';
 import { useChatPrefs } from '@/lib/hooks/useChatPrefs';
 import { useSession } from '@/lib/store/session';
 import { useTypingChats } from '@/lib/hooks/useTypingChats';
-import { setChatPref, type ChatPrefs } from '@/lib/db/prefs';
+import { setChatPref, setMute, type ChatListPref } from '@/lib/db/prefs';
+import { isMuted, muteLabel } from '@/lib/mute';
+import { useMuteClock } from '@/lib/hooks/useMuteClock';
 import { listTime } from '@/lib/format';
 import { setAppBadge } from '@/lib/badge';
 import { plainText } from '@/lib/formatting';
@@ -45,14 +47,16 @@ export function ChatListPanel() {
     useMemo(() => rows.filter((row) => !row.peerDeleted).map((row) => row.id), [rows]),
   );
 
+  // Timed mutes end by themselves; this moves on when the next one does.
+  const now = useMuteClock(prefs);
   const flags = useMemo(
     () => ({
       pinned: new Set(prefs.pinned),
-      muted: new Set(prefs.muted),
+      muted: { has: (chatId: string) => isMuted(prefs, chatId, now) },
       archived: new Set(prefs.archived),
       favourites: new Set(prefs.favourites),
     }),
-    [prefs],
+    [prefs, now],
   );
 
   const archivedRows = useMemo(() => rows.filter((row) => flags.archived.has(row.id)), [rows, flags]);
@@ -103,7 +107,7 @@ export function ChatListPanel() {
     if (!loading) setAppBadge(badge);
   }, [badge, loading]);
 
-  function toggle(pref: keyof ChatPrefs, chatId: string, on: boolean) {
+  function toggle(pref: ChatListPref, chatId: string, on: boolean) {
     if (myUid) void setChatPref(myUid, pref, chatId, on).catch(() => undefined);
   }
 
@@ -262,12 +266,14 @@ export function ChatListPanel() {
         <ChatRowMenu
           name={menuFor.peer?.displayName ?? (menuFor.peerDeleted ? 'Deleted account' : 'Chat')}
           pinned={flags.pinned.has(menuFor.id)}
-          muted={flags.muted.has(menuFor.id)}
+          muteStatus={muteLabel(prefs, menuFor.id, now)}
           archived={flags.archived.has(menuFor.id)}
           favourite={flags.favourites.has(menuFor.id)}
           pinnedCount={rows.filter((row) => flags.pinned.has(row.id) && !flags.archived.has(row.id)).length}
           onPin={(on) => toggle('pinned', menuFor.id, on)}
-          onMute={(on) => toggle('muted', menuFor.id, on)}
+          onMute={(duration) => {
+            if (myUid) void setMute(myUid, menuFor.id, duration).catch(() => undefined);
+          }}
           onArchive={(on) => toggle('archived', menuFor.id, on)}
           onFavourite={(on) => toggle('favourites', menuFor.id, on)}
           onClose={() => setMenuFor(null)}
