@@ -17,6 +17,11 @@ export function MessageMenu({
   mine,
   myReaction,
   starred,
+  pinned = false,
+  onPin,
+  onSelect,
+  selfChat = false,
+  canInfo = true,
   canReact,
   onReply,
   onEdit,
@@ -33,6 +38,16 @@ export function MessageMenu({
   /** The emoji I already put on this message, if any. */
   myReaction: string | null;
   starred: boolean;
+  /** Pinned in the chat (the bar under the header). */
+  pinned?: boolean;
+  /** Absent when this message cannot be pinned right now. */
+  onPin?: (on: boolean) => void;
+  /** Start selecting several messages, this one first. */
+  onSelect?: () => void;
+  /** "Message yourself": nobody else holds a copy, so one Delete does it. */
+  selfChat?: boolean;
+  /** False in a chat with myself: no receipts to show. */
+  canInfo?: boolean;
   /** False while the conversation key is missing: nothing to seal with. */
   canReact: boolean;
   onReply: () => void;
@@ -63,6 +78,7 @@ export function MessageMenu({
     () =>
       mine &&
       !message.deleted &&
+      !message.viewOnce &&
       message.text !== null &&
       !message.pending &&
       message.createdAt !== null &&
@@ -70,11 +86,14 @@ export function MessageMenu({
   );
 
   const canDeleteForEveryone = mine && !message.deleted;
+  // A view-once message's text is never copied, forwarded, starred or shown
+  // here: it is meant to be seen once, in its own viewer.
+  const text = message.viewOnce ? null : message.text;
 
   async function copy() {
-    if (message.text === null) return;
+    if (text === null) return;
     try {
-      await navigator.clipboard.writeText(message.text);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(onClose, 600);
     } catch {
@@ -125,17 +144,19 @@ export function MessageMenu({
 
         {picking && !confirming && <EmojiPanel onPick={react} />}
 
-        {message.text !== null && !picking && (
-          <p className="mx-3 mt-2 mb-3 line-clamp-3 text-[14px] text-muted">{message.text}</p>
+        {text !== null && !picking && (
+          <p className="mx-3 mt-2 mb-3 line-clamp-3 text-[14px] text-muted">{text}</p>
         )}
 
         {picking ? null : confirming ? (
           <div className="space-y-2 p-3">
             <p className="text-[15px] font-medium text-ink">Delete message?</p>
             <p className="pb-1 text-[13px] leading-relaxed text-muted">
-              {canDeleteForEveryone
-                ? 'Delete for me removes it from your devices only. Delete for everyone erases it from Zing’s servers for both of you. Neither can be undone.'
-                : 'It will be removed from your devices. The other person still has it. This cannot be undone.'}
+              {selfChat
+                ? 'It’s erased from Zing’s servers and all your devices. This cannot be undone.'
+                : canDeleteForEveryone
+                  ? 'Delete for me removes it from your devices only. Delete for everyone erases it from Zing’s servers for both of you. Neither can be undone.'
+                  : 'It will be removed from your devices. The other person still has it. This cannot be undone.'}
             </p>
             {canDeleteForEveryone && (
               <button
@@ -145,9 +166,10 @@ export function MessageMenu({
                 }}
                 className="h-11 w-full rounded-2xl bg-danger/15 text-[15px] font-medium text-danger"
               >
-                Delete for everyone
+                {selfChat ? 'Delete' : 'Delete for everyone'}
               </button>
             )}
+            {!(selfChat && canDeleteForEveryone) && (
             <button
               onClick={() => {
                 onDeleteForMe();
@@ -157,6 +179,7 @@ export function MessageMenu({
             >
               Delete for me
             </button>
+            )}
             <button
               onClick={() => setConfirming(false)}
               className="h-11 w-full rounded-2xl bg-elevated text-[15px] text-ink"
@@ -176,14 +199,24 @@ export function MessageMenu({
                 }}
               />
             )}
-            {message.text !== null && (
+            {onSelect && !message.pending && (
+              <Action
+                label="Select"
+                icon="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 12.5l2.5 2.5L16 9.5"
+                onClick={() => {
+                  onSelect();
+                  onClose();
+                }}
+              />
+            )}
+            {text !== null && (
               <Action
                 label={copied ? 'Copied' : 'Copy'}
                 icon="M8 8h11v12H8zM5 16V4h11"
                 onClick={() => void copy()}
               />
             )}
-            {message.text !== null && !message.deleted && (
+            {text !== null && !message.deleted && (
               <Action
                 label="Forward"
                 icon="M14 8l5 4-5 4M19 12h-9a5 5 0 0 0-5 5v1"
@@ -193,7 +226,17 @@ export function MessageMenu({
                 }}
               />
             )}
-            {!message.deleted && !message.pending && (
+            {onPin && !message.deleted && !message.pending && !message.viewOnce && (
+              <Action
+                label={pinned ? 'Unpin' : 'Pin'}
+                icon="M9 4h6l-1 5 3 3v2H7v-2l3-3zM12 14v6"
+                onClick={() => {
+                  onPin(!pinned);
+                  onClose();
+                }}
+              />
+            )}
+            {!message.deleted && !message.pending && !message.viewOnce && (
               <Action
                 label={starred ? 'Unstar' : 'Star'}
                 icon="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"
@@ -203,7 +246,7 @@ export function MessageMenu({
                 }}
               />
             )}
-            {mine && !message.deleted && !message.pending && (
+            {canInfo && mine && !message.deleted && !message.pending && (
               <Action
                 label="Info"
                 icon="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01"

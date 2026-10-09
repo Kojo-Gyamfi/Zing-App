@@ -42,8 +42,12 @@ export function RecoveryKeyDisplay({ recoveryKey, username }: Props) {
     const link = document.createElement('a');
     link.href = url;
     link.download = `zing-recovery-key-${username}.txt`;
+    // In the page, and revoked a moment later: Safari downloads nothing from
+    // a detached link or a blob URL revoked in the same tick.
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return (

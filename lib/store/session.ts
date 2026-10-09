@@ -11,6 +11,7 @@ import { forgetPresence, trackPresence } from '@/lib/db/presence';
 import { disablePush } from '@/lib/push';
 import { setAppBadge } from '@/lib/badge';
 import { useKeys } from '@/lib/store/keys';
+import { useProfiles } from '@/lib/store/profiles';
 import { watchAccount } from '@/lib/store/account';
 import { clearDrafts } from '@/lib/store/drafts';
 import type { Identity } from '@/lib/crypto/types';
@@ -157,6 +158,16 @@ export const useSession = create<SessionState>((set, get) => ({
         // Unsealed conversation keys live in memory for the session; signing
         // out must not leave them behind in a tab that stays open.
         useKeys.getState().clear();
+        useProfiles.getState().reset();
+        // Signed out from elsewhere -- the session revoked, the account
+        // deleted on another device -- rather than with the button: wipe what
+        // the button would have, or the next person on this phone finds the
+        // old account's key, half-typed messages and badge.
+        if (get().user) {
+          setAppBadge(0);
+          clearDrafts();
+          void clearIdentity().catch(() => undefined);
+        }
         set({ status: 'signedOut', user: null, profile: null, identity: null });
         return;
       }
@@ -210,6 +221,7 @@ export const useSession = create<SessionState>((set, get) => ({
     await clearIdentity().catch(() => undefined);
     await firebaseSignOut(auth());
     useKeys.getState().clear();
+    useProfiles.getState().reset();
     set({ status: 'signedOut', user: null, profile: null, identity: null });
   },
 }));

@@ -11,18 +11,24 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 import { FormattedText, ForwardedLabel } from '@/components/chat/MessageBubble';
 import type { UserDoc } from '@/lib/db/schema';
+import { useMyPhoto, useNicknames } from '@/lib/store/account';
+import { nameFor } from '@/lib/names';
+import { isSelfChat } from '@/lib/chatIds';
 
 /**
  * Every message this person starred, across all chats, decrypted on this
  * device. Firestore holds only which ids are starred; the words exist here.
  */
 export default function StarredPage() {
-  const { user, identity } = useSession();
+  const { user, identity, profile } = useSession();
+  const nicknames = useNicknames();
+  const myPhoto = useMyPhoto(profile?.photoURL);
   const keyFor = useKeys((state) => state.get);
   const loadProfile = useProfiles((state) => state.load);
   const [items, setItems] = useState<StarredMessage[] | null>(null);
   const [peers, setPeers] = useState<Record<string, UserDoc | null>>({});
   const [failed, setFailed] = useState(false);
+  const missing = useProfiles((state) => state.missing);
 
   const uid = user?.uid;
 
@@ -99,15 +105,20 @@ export default function StarredPage() {
               const peerUid = message.chatId.split('_').find((id) => id !== uid) ?? '';
               const peer = peers[peerUid];
               const mine = message.senderId === uid;
-              const peerName = peer?.displayName ?? 'Deleted account';
+              const self = isSelfChat(message.chatId, uid);
+              // "Deleted account" only when that is known, not for a profile this
+              // device just could not fetch (offline).
+              const peerName = self
+                ? 'Message yourself'
+                : nameFor(peer, nicknames, missing[peerUid] ? 'Deleted account' : 'Unknown');
 
               return (
                 <li key={`${message.chatId}:${message.id}`} className="flex gap-3 px-4 py-3">
-                  <Avatar name={peerName} photoURL={peer?.photoURL} size={36} />
+                  <Avatar name={peerName} photoURL={self ? myPhoto : peer?.photoURL} size={36} />
                   <Link href={`/chats/${message.chatId}#m-${message.id}`} className="min-w-0 flex-1">
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="truncate text-[13px] font-medium">
-                        {mine ? `You ▸ ${peerName}` : `${peerName} ▸ You`}
+                        {self ? peerName : mine ? `You ▸ ${peerName}` : `${peerName} ▸ You`}
                       </span>
                       <span className="shrink-0 text-[12px] text-faint">{listTime(message.createdAt)}</span>
                     </span>

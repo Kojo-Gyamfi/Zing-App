@@ -52,6 +52,8 @@ export type AccountDoc = {
   appearance?: Partial<Appearance>;
   /** Per-chat wallpaper and bubble colour, overriding `appearance`. */
   chatThemes?: Record<string, ChatTheme>;
+  /** What this user calls other people, by uid. Only they see it (lib/names.ts). */
+  nicknames?: Record<string, string>;
   /** What this user shows other people. A missing field means the default. */
   privacy?: Partial<Privacy>;
   /**
@@ -128,7 +130,14 @@ export type ChatDoc = {
     deleted?: boolean;
     /** Copied from a disappearing message; ciphertext is stripped once it passes. */
     expiresAt?: Timestamp;
+    /** A view-once message: the preview never carries its ciphertext. */
+    viewOnce?: boolean;
   } | null;
+  /**
+   * Messages pinned in the chat, oldest first, at most MAX_PINNED_MESSAGES.
+   * Ids only: the bar renders the text this device already decrypted.
+   */
+  pinnedMessages?: string[];
   /**
    * Disappearing messages: seconds each new message lives, one of
    * DISAPPEARING_OPTIONS. Absent or 0 is off. Either member may change it.
@@ -185,7 +194,17 @@ export type MessageDoc = {
    * allow a real delete only after it). Set from the sender's clock.
    */
   expiresAt?: Timestamp;
+  /**
+   * View once (lib/viewOnce.ts): the recipient sees it a single time, and
+   * opening it wipes the ciphertext from the server for good.
+   */
+  viewOnce?: boolean;
+  /** When the recipient opened it; the ciphertext is gone from then on. */
+  viewedAt?: Timestamp;
 };
+
+/** Pinned messages per chat, as on WhatsApp. Mirrored in firestore.rules. */
+export const MAX_PINNED_MESSAGES = 3;
 
 /**
  * Disappearing-message timers, in seconds: off, 24 hours, 7 days, 90 days.
@@ -243,4 +262,8 @@ export type DecryptedMessage = {
   failed?: boolean;
   /** When a disappearing message goes. */
   expiresAt?: Date | null;
+  /** Shown once to the recipient; see MessageDoc.viewOnce. */
+  viewOnce?: boolean;
+  /** A view-once message the recipient has opened: nothing left to show. */
+  viewed?: boolean;
 };

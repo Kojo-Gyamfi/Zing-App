@@ -9,10 +9,21 @@ import { formatText, plainText, type FormattedRun } from '@/lib/formatting';
 import type { ReactionChip } from '@/lib/reactions';
 import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
+import { VIEW_ONCE_LABEL, viewOnceState } from '@/lib/viewOnce';
 
 /** How far a bubble must be dragged right before letting go counts as "reply". */
 const SWIPE_TO_REPLY = 56;
 const LONG_PRESS_MS = 450;
+
+/** A circle with a 1 in it: WhatsApp's view-once mark. */
+export function ViewOnceIcon({ className = 'size-4 shrink-0' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeDasharray="4 2.2" />
+      <path d="M10.5 9.5 12.5 8v8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 /** WhatsApp's marker for a message that was forwarded rather than typed. */
 export function ForwardedLabel() {
@@ -139,6 +150,10 @@ export function MessageBubble({
   onReactionClick,
   onRetry,
   onDiscard,
+  onOpenViewOnce,
+  selecting = false,
+  selected = false,
+  onToggleSelect,
 }: {
   message: DecryptedMessage;
   mine: boolean;
@@ -161,6 +176,15 @@ export function MessageBubble({
   /** Only used for failed messages. */
   onRetry?: () => void;
   onDiscard?: () => void;
+  /** A view-once message of theirs, not opened yet: open it. */
+  onOpenViewOnce?: () => void;
+  /**
+   * Selecting several messages, WhatsApp style: a tap anywhere on the row
+   * picks or drops this one, instead of opening links, quotes or the menu.
+   */
+  selecting?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const x = useMotionValue(0);
   // The reply arrow fades in as the bubble is pulled towards the threshold.
@@ -182,12 +206,14 @@ export function MessageBubble({
 
   // Swipe-to-reply needs something to quote; the menu only needs a real
   // message, so a "deleted" placeholder can still be deleted for me.
-  const interactive = !message.failed && !message.deleted;
-  const hasMenu = !message.failed;
+  const interactive = !message.failed && !message.deleted && !selecting;
+  const hasMenu = !message.failed && !selecting;
   const showReactions = reactions.length > 0 && !message.deleted;
+  const viewOnce = viewOnceState(message, mine);
+  // A view-once message's text only ever shows in its own viewer.
   const runs = useMemo(
-    () => (message.text ? formatText(message.text, search) : []),
-    [message.text, search],
+    () => (message.text && !message.viewOnce ? formatText(message.text, search) : []),
+    [message.text, message.viewOnce, search],
   );
   // The first link outside code, which formatText has already picked out.
   const firstHref = runs.find((run) => run.href)?.href;
@@ -200,11 +226,47 @@ export function MessageBubble({
       initial={{ opacity: 0, y: 8, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-      className={`relative flex w-full rounded-xl transition-colors duration-700
+      className={`relative flex w-full items-center rounded-xl transition-colors
+        ${selecting ? 'cursor-pointer duration-150' : 'duration-700'}
         ${mine ? 'justify-end' : 'justify-start'}
-        ${highlighted ? 'bg-zing/15' : ''}
+        ${highlighted || selected ? 'bg-zing/15' : ''}
         ${showReactions ? 'mb-4' : ''}`}
+      // While selecting, the whole row is one target: captured here so links,
+      // quotes and "Tap to view" inside do not also act.
+      onClickCapture={
+        selecting && !message.failed
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleSelect?.();
+            }
+          : undefined
+      }
+      onContextMenu={
+        selecting
+          ? (event) => {
+              event.preventDefault();
+              if (!message.failed) onToggleSelect?.();
+            }
+          : undefined
+      }
+      role={selecting ? 'checkbox' : undefined}
+      aria-checked={selecting ? selected : undefined}
+      aria-label={selecting ? (selected ? 'Selected message' : 'Select message') : undefined}
     >
+      {selecting && !message.failed && (
+        <span
+          aria-hidden="true"
+          className={`absolute left-1 grid size-5 place-items-center rounded-full border-2 transition-colors
+            ${selected ? 'border-zing bg-zing text-on-zing' : 'border-muted'}`}
+        >
+          {selected && (
+            <svg viewBox="0 0 24 24" className="size-3.5">
+              <path d="M5 12.5 10 17.5 19 7" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </span>
+      )}
       <motion.div
         drag={interactive ? 'x' : false}
         dragDirectionLock
@@ -242,6 +304,7 @@ export function MessageBubble({
         // pan-y keeps vertical scrolling native while the bubble owns
         // horizontal drags; no-callout stops iOS's own long-press menu.
         className={`group relative max-w-[78%] touch-pan-y px-3 py-2 text-[15px] leading-snug
+          ${selecting && !mine ? 'ml-8' : ''}
           select-none [-webkit-touch-callout:none] md:select-text
           ${mine ? 'bg-bubble-out text-ink' : 'bg-bubble-in text-ink'}
           ${
@@ -301,6 +364,24 @@ export function MessageBubble({
             </svg>
             {mine ? 'You deleted this message' : DELETED_LABEL}
           </span>
+        ) : viewOnce !== 'none' ? (
+          viewOnce === 'ready' ? (
+            <button
+              type="button"
+              onClick={onOpenViewOnce}
+              // Opening is a tap of its own, not the start of a long-press.
+              onPointerDown={(event) => event.stopPropagation()}
+              className="flex items-center gap-2 py-0.5 text-left font-medium text-zing-soft"
+            >
+              <ViewOnceIcon />
+              {VIEW_ONCE_LABEL} · Tap to view
+            </button>
+          ) : (
+            <span className="flex items-center gap-2 py-0.5 text-muted">
+              <ViewOnceIcon />
+              {viewOnce === 'opened' ? 'Opened' : VIEW_ONCE_LABEL}
+            </span>
+          )
         ) : message.text === null ? (
           <span className="flex items-center gap-1.5 text-muted italic">
             <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">

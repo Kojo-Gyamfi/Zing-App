@@ -79,14 +79,21 @@ service cloud.firestore {
                     && request.resource.data.publicKey is string
                     && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.uid == uid;
 
-      // Username and public key are identity anchors -- neither may drift after
-      // creation, or safety numbers and @handles stop meaning anything. Only
-      // these fields may change at all. contactPhoto says the photo is at
-      // shared/photo, for contacts only (lib/db/privacy.ts).
+      // The public key is the identity anchor and never changes, or safety
+      // numbers stop meaning anything. The @username may change, but only in
+      // the same transaction that claims the new handle for this user and
+      // releases the old one (lib/db/users.ts changeUsername) -- never a handle
+      // nobody claimed, and never two at once. Only these fields may change.
+      // contactPhoto says the photo is at shared/photo (lib/db/privacy.ts).
       allow update: if isSelf(uid)
                     && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup', 'contactPhoto'])
-                    && request.resource.data.get('contactPhoto', true) == true;
+                         .hasOnly(['displayName', 'about', 'photoURL', 'keyBackup', 'contactPhoto', 'username'])
+                    && request.resource.data.get('contactPhoto', true) == true
+                    && (request.resource.data.username == resource.data.username
+                        || (request.resource.data.username is string
+                            && request.resource.data.username.matches('^[a-z0-9_]{3,20}$')
+                            && getAfter(/databases/$(database)/documents/usernames/$(request.resource.data.username)).data.uid == uid
+                            && !existsAfter(/databases/$(database)/documents/usernames/$(resource.data.username))));
 
       // "Delete my account" (lib/db/account.ts). Chats and the messages in
       // them stay: they belong to the other person too.
@@ -125,17 +132,20 @@ service cloud.firestore {
     // Username claims. Never updated, so a claim can never be stolen or
     // reassigned. Each claim must be matched by the claimant's own profile in
     // the same transaction, so one account cannot squat a pile of handles.
-    // The owner releases it only when deleting their account, together with
-    // the profile itself.
+    // The owner releases it when deleting their account, or when moving to a
+    // new handle -- in both cases together with the profile change.
     match /usernames/{username} {
       allow read: if signedIn();
       allow create: if signedIn()
                     && request.resource.data.uid == request.auth.uid
                     && username.matches('^[a-z0-9_]{3,20}$')
                     && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
+      // Released with the account, or when the owner moves to another handle
+      // in the same transaction (the profile no longer names this one).
       allow delete: if signedIn()
                     && resource.data.uid == request.auth.uid
-                    && !existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+                    && (!existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+                        || getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username != username);
       allow update: if false;
     }
 
@@ -180,11 +190,16 @@ service cloud.firestore {
       // update; without this a hand-rolled client could create a chat already
       // claiming both people have spoken (unlocking a stranger's phone
       // number), or with forged receipts, a huge badge or an oversized preview.
+      // Two people, sorted -- or "Message yourself": one member, its owner,
+      // with the uid twice as the id (lib/chatIds.ts).
       allow create: if signedIn()
                     && request.auth.uid in request.resource.data.members
-                    && request.resource.data.members.size() == 2
-                    && request.resource.data.members[0] < request.resource.data.members[1]
-                    && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1]
+                    && ((request.resource.data.members.size() == 2
+                         && request.resource.data.members[0] < request.resource.data.members[1]
+                         && chatId == request.resource.data.members[0] + '_' + request.resource.data.members[1])
+                        || (request.resource.data.members.size() == 1
+                            && request.resource.data.members[0] == request.auth.uid
+                            && chatId == request.auth.uid + '_' + request.auth.uid))
                     && request.resource.data.keys().hasOnly([
                          'members', 'lastMessage', 'lastRead', 'lastDelivered', 'unread',
                          'createdAt', 'updatedAt'])
@@ -209,13 +224,16 @@ service cloud.firestore {
       // badge by a thousand, no zeroing it for them.
       function unreadChangeOk() {
         let me = request.auth.uid;
-        let peer = resource.data.members[0] == me ? resource.data.members[1] : resource.data.members[0];
+        // A chat with yourself has no peer; nobody's badge goes up there.
+        let peer = resource.data.members.size() == 1
+                     ? me
+                     : (resource.data.members[0] == me ? resource.data.members[1] : resource.data.members[0]);
         let before = resource.data.get('unread', {});
         let after = request.resource.data.get('unread', {});
         let changed = after.diff(before).affectedKeys();
         return changed.hasOnly([me, peer])
                && (!(me in changed) || after[me] == 0)
-               && (!(peer in changed) || after[peer] == before.get(peer, 0) + 1);
+               && (peer == me || !(peer in changed) || after[peer] == before.get(peer, 0) + 1);
       }
 
       // "Has sent a message here", one flag per member: what unlocks phone
@@ -295,13 +313,27 @@ service cloud.firestore {
         let changed = request.resource.data.diff(resource.data).affectedKeys();
         return request.resource.data.keys().hasOnly([
                  'members', 'lastMessage', 'lastRead', 'lastDelivered', 'unread', 'sent',
-                 'blocked', 'disappearing', 'createdAt', 'updatedAt'])
+                 'blocked', 'disappearing', 'pinnedMessages', 'createdAt', 'updatedAt'])
                && !('createdAt' in changed)
                && (!('updatedAt' in changed) || request.resource.data.updatedAt == request.time)
                && (!('lastMessage' in changed)
                    || (previewShapeOk()
                        && (request.resource.data.lastMessage.senderId == request.auth.uid
-                           || expiredPreviewCleared())));
+                           || expiredPreviewCleared())))
+               && previewStillNewest(changed);
+      }
+
+      // A preview change that is not a new message (an edit, a delete for
+      // everyone, an expired preview stripped) must be about the message the
+      // preview already shows. Otherwise a write queued offline, landing after
+      // a newer message, would put the old one back over it.
+      function previewStillNewest(changed) {
+        return !('lastMessage' in changed)
+               || 'updatedAt' in changed
+               || resource.data.get('lastMessage', null) == null
+               || request.resource.data.get('lastMessage', null) == null
+               || request.resource.data.lastMessage.get('id', null)
+                    == resource.data.lastMessage.get('id', null);
       }
 
       // The preview's fields, each of the type the app writes. Both phones
@@ -311,13 +343,26 @@ service cloud.firestore {
         let preview = request.resource.data.lastMessage;
         return preview == null
                || (preview is map
-                   && preview.keys().hasOnly(['id', 'senderId', 'ciphertext', 'nonce', 'deleted', 'expiresAt'])
+                   && preview.keys().hasOnly(['id', 'senderId', 'ciphertext', 'nonce', 'deleted', 'expiresAt', 'viewOnce'])
+                   && preview.get('viewOnce', false) is bool
                    && preview.senderId is string
                    && preview.get('id', '') is string
                    && preview.get('ciphertext', '') is string
                    && preview.get('nonce', '') is string
                    && preview.get('deleted', false) is bool
                    && (preview.get('expiresAt', null) == null || preview.expiresAt is timestamp));
+      }
+
+      // Pinned messages: ids only, at most three (MAX_PINNED_MESSAGES in
+      // lib/db/schema.ts). Either member may pin or unpin.
+      function pinnedOk() {
+        let pins = request.resource.data.get('pinnedMessages', []);
+        // Each a message id: a stray "/" or a huge value would break the
+        // other member's fetch of the pins, or bloat a doc both lists download.
+        return pins is list && pins.size() <= 3
+               && (pins.size() < 1 || (pins[0] is string && pins[0].matches('^[A-Za-z0-9]{1,40}$')))
+               && (pins.size() < 2 || (pins[1] is string && pins[1].matches('^[A-Za-z0-9]{1,40}$')))
+               && (pins.size() < 3 || (pins[2] is string && pins[2].matches('^[A-Za-z0-9]{1,40}$')));
       }
 
       // lastMessage / updatedAt / receipts / unread / sent / blocked may move;
@@ -332,6 +377,7 @@ service cloud.firestore {
                     && blockChangeOk()
                     && quietWhileBlocked()
                     && disappearingOk()
+                    && pinnedOk()
                     && previewSizeOk();
 
       allow delete: if false;
@@ -392,8 +438,9 @@ service cloud.firestore {
                       && request.resource.data.nonce is string
                       && request.resource.data.createdAt == request.time
                       && request.resource.data.get('forwarded', false) is bool
+                      && request.resource.data.get('viewOnce', false) is bool
                       && expiryOk()
-                      && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt', 'reactions']);
+                      && !request.resource.data.keys().hasAny(['editedAt', 'deleted', 'deletedAt', 'reactions', 'viewedAt']);
 
         // A disappearing message's expiry: the sender's clock, so only checked
         // to lie ahead and within the longest timer (90 days, plus a day of
@@ -430,6 +477,10 @@ service cloud.firestore {
         // React (any member): your own entry in `reactions` and nothing else,
         // so nobody can put words -- or emoji -- in the other person's mouth.
         //
+        // Opened (recipient only, view-once only): the ciphertext goes, for
+        // good, stamped with when (lib/viewOnce.ts). A view-once message is
+        // never edited -- that would make it viewable again.
+        //
         // In a blocked chat only the delete is left: an edit or a reaction
         // would be a way of still sending something.
         allow update: if signedIn()
@@ -439,6 +490,7 @@ service cloud.firestore {
                         (
                           !chatBlocked(chatId)
                           && resource.data.senderId == request.auth.uid
+                          && !resource.data.get('viewOnce', false)
                           && request.resource.data.diff(resource.data).affectedKeys()
                             .hasOnly(['ciphertext', 'nonce', 'editedAt'])
                           && request.resource.data.ciphertext is string
@@ -461,6 +513,14 @@ service cloud.firestore {
                                .diff(resource.data.get('reactions', {})).affectedKeys()
                                .hasOnly([request.auth.uid])
                           && reactionOk(request.resource.data.reactions.get(request.auth.uid, null))
+                        ) || (
+                          resource.data.get('viewOnce', false) == true
+                          && resource.data.senderId != request.auth.uid
+                          && resource.data.get('viewedAt', null) == null
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['ciphertext', 'nonce', 'viewedAt'])
+                          && request.resource.data.viewedAt == request.time
+                          && !request.resource.data.keys().hasAny(['ciphertext', 'nonce'])
                         )
                       );
 

@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSession } from '@/lib/store/session';
 import {
-  getPhone,
+  getOwnPhone,
   getRecoveryBackup,
   setPhone as savePhone,
   setRecoveryBackup,
@@ -25,6 +25,7 @@ import { Field } from '@/components/ui/Field';
 import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 import { ShareProfileCard } from '@/components/settings/ShareProfileCard';
 import { PrivacySettings } from '@/components/settings/PrivacySettings';
+import { UsernameSetting } from '@/components/settings/UsernameSetting';
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
 
 const MIN_PASSPHRASE = 10;
@@ -44,6 +45,12 @@ export default function SettingsPage() {
 
   async function removeAccount() {
     if (!user || !profile) return;
+    // Deleting is several writes; offline, they would queue and leave the
+    // account half-deleted whenever the connection came back.
+    if (!navigator.onLine) {
+      setDeleteError('You’re offline. Connect, then delete your account.');
+      return;
+    }
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -56,6 +63,9 @@ export default function SettingsPage() {
           setDeleting(false);
           return;
         }
+        // Used now: a retry must not send it again (it would be "expired").
+        setDeleteCodeSentTo(null);
+        setDeleteCode('');
       }
       // After a fresh sign-in, the current user object is the one with the
       // new credentials.
@@ -65,9 +75,11 @@ export default function SettingsPage() {
     } catch (cause) {
       const code = (cause as { code?: string }).code ?? '';
       if (code === NEEDS_FRESH_SIGNIN && user.email) {
-        // Nothing has been deleted yet.
+        // Usually nothing has been deleted yet. But a retry after a deletion
+        // that failed at its last step has no profile left, and a "signin"
+        // code is only sent to an address with one -- "signup" sends to any.
         try {
-          await requestCode(user.email, 'signin');
+          await requestCode(user.email, 'signup');
           setDeleteCodeSentTo(user.email);
           setDeleteCode('');
           setDeleteError(null);
@@ -80,6 +92,8 @@ export default function SettingsPage() {
       setDeleteError(
         code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request'
           ? 'Confirm with Google to delete your account.'
+          : code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment'
+            ? 'This browser blocked the Google sign-in window. Allow pop-ups for Zing, or open Zing in your browser rather than the installed app, and try again.'
           : code === 'auth/user-mismatch'
             ? 'Pick the Google account you use for Zing.'
             : 'Could not delete your account. Check your connection and try again.',
@@ -91,6 +105,10 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState(profile?.displayName ?? '');
   const [about, setAbout] = useState(profile?.about ?? '');
   const [phone, setPhone] = useState('');
+  // The number as loaded: undefined until then (or if it could not be read),
+  // so Save never mistakes "not loaded" for "removed" and deletes it.
+  const [loadedPhone, setLoadedPhone] = useState<string | undefined>(undefined);
+  const phoneEdited = useRef(false);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -135,7 +153,14 @@ export default function SettingsPage() {
   const uid = profile?.uid;
   useEffect(() => {
     if (!uid) return;
-    void getPhone(uid).then((number) => setPhone(number ? formatPhone(number) : ''));
+    void getOwnPhone(uid)
+      .then((number) => {
+        const shown = number ? formatPhone(number) : '';
+        setLoadedPhone(shown);
+        // A read that lands late must not overwrite what is being typed.
+        if (!phoneEdited.current) setPhone(shown);
+      })
+      .catch(() => undefined);
     void getRecoveryBackup(uid)
       .then((doc) => setRecoveryCreated(doc ? (doc.createdAt?.toDate() ?? new Date()) : null))
       .catch(() => setRecoveryCreated(null));
@@ -159,6 +184,13 @@ export default function SettingsPage() {
       return;
     }
 
+    // Offline, the write would queue and spin here until the connection came
+    // back -- maybe after the person had given up and forgotten what they typed.
+    if (!navigator.onLine) {
+      setPassphraseError('You’re offline. Connect, then change it.');
+      return;
+    }
+
     setPassphraseBusy(true);
     try {
       await updateKeyBackup(profile.uid, await wrapPrivateKey(identity.privateKey, newPassphrase));
@@ -179,17 +211,26 @@ export default function SettingsPage() {
   async function createRecoveryKey() {
     if (!profile || !identity) return;
     setRecoveryError(null);
+    // A queued write would replace the old key whenever the connection came
+    // back, with a new one nobody may still have on screen.
+    if (!navigator.onLine) {
+      setRecoveryError('You’re offline. Connect, then create the key.');
+      return;
+    }
     setRecoveryBusy(true);
+    let recoveryKey: string | null = null;
     try {
-      const recoveryKey = await generateRecoveryKey();
-      await setRecoveryBackup(
-        profile.uid,
-        await wrapWithRecoveryKey(identity.privateKey, recoveryKey),
-      );
+      recoveryKey = await generateRecoveryKey();
+      const backup = await wrapWithRecoveryKey(identity.privateKey, recoveryKey);
+      // Shown before the write is confirmed: if the connection drops now, the
+      // write still lands later, and the key it makes valid is on screen.
       setNewRecoveryKey(recoveryKey);
-      setRecoveryCreated(new Date());
       setConfirmingNewKey(false);
+      await setRecoveryBackup(profile.uid, backup);
+      setRecoveryCreated(new Date());
     } catch {
+      // Refused, so the old key still stands and this one means nothing.
+      setNewRecoveryKey((shown) => (shown === recoveryKey ? null : shown));
       setRecoveryError('Could not create a recovery key. Check your connection and try again.');
     } finally {
       setRecoveryBusy(false);
@@ -198,6 +239,11 @@ export default function SettingsPage() {
 
   async function save() {
     if (!profile) return;
+    // Offline, the write would queue and "Save changes" spin until reconnect.
+    if (!navigator.onLine) {
+      setSaveError('You’re offline. Connect, then save.');
+      return;
+    }
 
     setSaving(true);
     setPhoneError(null);
@@ -216,8 +262,14 @@ export default function SettingsPage() {
       return;
     }
 
+    // Only a change the person made: before the number has loaded, an empty
+    // field means "not shown yet", not "remove it".
+    const phoneChanged = loadedPhone === undefined ? phone.trim() !== '' : phone !== loadedPhone;
     try {
-      await savePhone(profile.uid, phone);
+      if (phoneChanged) {
+        await savePhone(profile.uid, phone);
+        setLoadedPhone(phone);
+      }
     } catch (cause) {
       const code = (cause as Error).message;
       setPhoneError(
@@ -266,6 +318,8 @@ export default function SettingsPage() {
         <section className="space-y-4">
           <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Profile</h2>
 
+          <UsernameSetting uid={profile.uid} username={profile.username} onChanged={refreshProfile} />
+
           <Field
             label="Display name"
             value={displayName}
@@ -282,7 +336,10 @@ export default function SettingsPage() {
             label="Phone number"
             hint="Optional. Lets friends find you, and people you chat with can see it. Not verified."
             value={phone}
-            onChange={(event) => setPhone(limitPhoneInput(event.target.value))}
+            onChange={(event) => {
+              phoneEdited.current = true;
+              setPhone(limitPhoneInput(event.target.value));
+            }}
             placeholder="024 123 4567"
             inputMode="tel"
             error={phoneError}

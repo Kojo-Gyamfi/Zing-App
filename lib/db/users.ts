@@ -98,7 +98,13 @@ export async function createProfile(params: {
 
   await runTransaction(db(), async (transaction) => {
     const claimRef = doc(db(), 'usernames', username);
-    if ((await transaction.get(claimRef)).exists()) {
+    const claim = await transaction.get(claimRef);
+    if (claim.exists()) {
+      // The commit reached the server but its answer was lost, and the SDK
+      // ran this again: the claim is ours, with this very key. That is done,
+      // not taken -- calling it taken would dead-end onboarding.
+      const mine = await transaction.get(doc(db(), 'users', params.uid));
+      if (claim.data().uid === params.uid && mine.data()?.publicKey === params.publicKey) return;
       throw new Error('USERNAME_TAKEN');
     }
     if (phone && (await transaction.get(phoneRef(phone))).exists()) {
@@ -162,6 +168,16 @@ export async function getPhone(uid: string): Promise<string | null> {
 }
 
 /**
+ * My own number. Unlike getPhone, a failed read is an error, not "none":
+ * Settings must never take a read it could not make for an empty field and
+ * save that, deleting the number.
+ */
+export async function getOwnPhone(uid: string): Promise<string | null> {
+  const contact = await getDoc(contactRef(uid));
+  return (contact.data() as ContactDoc | undefined)?.phone ?? null;
+}
+
+/**
  * Move this user's phone claim. Releasing the old number and taking the new one
  * happen together, so a failed save never leaves someone findable by neither.
  */
@@ -209,6 +225,38 @@ export async function getRecoveryBackup(uid: string): Promise<RecoveryDoc | null
 /** Replaces any earlier recovery key: the old one stops working. */
 export async function setRecoveryBackup(uid: string, backup: KeyBackup): Promise<void> {
   await setDoc(recoveryRef(uid), { backup, createdAt: serverTimestamp() });
+}
+
+/**
+ * Change my @username: claim the new handle, release the old one and point
+ * the profile at it, in one transaction -- the rules accept the change only
+ * as that whole, so I never hold two handles or none. The old one is free for
+ * anyone afterwards, and links to it stop working. Chats are unaffected: they
+ * are keyed by uid, and the safety number by key, not by name.
+ */
+export async function changeUsername(uid: string, current: string, raw: string): Promise<string> {
+  const next = normalizeUsername(raw);
+  if (!USERNAME_PATTERN.test(next)) throw new Error('USERNAME_INVALID');
+  if (next === current) return current;
+
+  await runTransaction(db(), async (transaction) => {
+    const profileRef = doc(db(), 'users', uid);
+    const claimRef = doc(db(), 'usernames', next);
+    const oldRef = doc(db(), 'usernames', current);
+    const [profile, claim, old] = await Promise.all([
+      transaction.get(profileRef),
+      transaction.get(claimRef),
+      transaction.get(oldRef),
+    ]);
+    // Done already: the commit landed but its answer was lost, and this ran again.
+    if (profile.data()?.username === next) return;
+    if (claim.exists() && claim.data().uid !== uid) throw new Error('USERNAME_TAKEN');
+
+    if (!claim.exists()) transaction.set(claimRef, { uid });
+    if (old.exists() && old.data().uid === uid) transaction.delete(oldRef);
+    transaction.update(profileRef, { username: next });
+  });
+  return next;
 }
 
 export async function updateProfile(

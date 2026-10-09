@@ -777,3 +777,224 @@ describe('server-only data', () => {
     await assertFails(getDoc(doc(as('carol'), 'users/alice/private/recovery')));
   });
 });
+
+describe('message yourself', () => {
+  const SELF = 'alice_alice';
+  const empty = {
+    lastMessage: null,
+    lastRead: {},
+    lastDelivered: {},
+    unread: {},
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  it('is a chat whose only member is its owner, under their uid twice', async () => {
+    await assertSucceeds(setDoc(doc(as('alice'), 'chats', SELF), { members: ['alice'], ...empty }));
+  });
+
+  it('cannot be made for someone else, or with the owner listed twice', async () => {
+    await assertFails(setDoc(doc(as('carol'), 'chats', SELF), { members: ['alice'], ...empty }));
+    await assertFails(setDoc(doc(as('alice'), 'chats', 'bob_bob'), { members: ['bob'], ...empty }));
+    await assertFails(
+      setDoc(doc(as('alice'), 'chats', SELF), { members: ['alice', 'alice'], ...empty }),
+    );
+    await assertFails(setDoc(doc(as('alice'), 'chats', 'alice_x'), { members: ['alice'], ...empty }));
+  });
+
+  it('takes its key, messages and preview like any chat, and stays private', async () => {
+    await setDoc(doc(as('alice'), 'chats', SELF), { members: ['alice'], ...empty });
+    await assertSucceeds(setDoc(doc(as('alice'), 'chats', SELF, 'keys', 'alice'), { sealed: 's' }));
+
+    const alice = as('alice');
+    const batch = writeBatch(alice);
+    batch.set(doc(alice, 'chats', SELF, 'messages', 'n1'), {
+      senderId: 'alice',
+      ciphertext: 'c',
+      nonce: 'n',
+      type: 'text',
+      createdAt: serverTimestamp(),
+      replyTo: null,
+    });
+    batch.update(doc(alice, 'chats', SELF), {
+      lastMessage: { id: 'n1', senderId: 'alice', ciphertext: 'c', nonce: 'n' },
+      updatedAt: serverTimestamp(),
+      'sent.alice': true,
+    });
+    await assertSucceeds(batch.commit());
+    await assertSucceeds(updateDoc(doc(as('alice'), 'chats', SELF), { 'unread.alice': 0 }));
+
+    await assertFails(getDoc(doc(as('bob'), 'chats', SELF)));
+    await assertFails(getDoc(doc(as('bob'), 'chats', SELF, 'messages', 'n1')));
+  });
+});
+
+describe('nicknames', () => {
+  it('live on the owner-only account doc', async () => {
+    const nicknames = { nicknames: { bob: 'Bobby' } };
+    await assertSucceeds(setDoc(doc(as('alice'), 'users/alice/private/account'), nicknames, { merge: true }));
+    await assertFails(getDoc(doc(as('bob'), 'users/alice/private/account')));
+  });
+});
+
+describe('pinned messages', () => {
+  it('are up to three ids, set by either member', async () => {
+    await assertSucceeds(updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: ['m1'] }));
+    await assertSucceeds(
+      updateDoc(doc(as('bob'), 'chats', CHAT), { pinnedMessages: ['m1', 'm2', 'm3'] }),
+    );
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: ['m1', 'm2', 'm3', 'm4'] }),
+    );
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: 'm1' }));
+    await assertFails(updateDoc(doc(as('carol'), 'chats', CHAT), { pinnedMessages: ['m1'] }));
+  });
+
+  it('stay as they are while the chat is blocked', async () => {
+    await updateDoc(doc(as('alice'), 'chats', CHAT), { 'blocked.alice': true });
+    await assertFails(updateDoc(doc(as('bob'), 'chats', CHAT), { pinnedMessages: ['m1'] }));
+  });
+});
+
+describe('view once', () => {
+  const message = (extra: Record<string, unknown> = {}) => ({
+    senderId: 'alice',
+    ciphertext: 'c',
+    nonce: 'n',
+    type: 'text',
+    createdAt: serverTimestamp(),
+    replyTo: null,
+    ...extra,
+  });
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore() as unknown as Firestore;
+      await setDoc(doc(db, 'chats', CHAT, 'messages', 'once'), {
+        ...message({ viewOnce: true }),
+        createdAt: new Date(),
+      });
+    });
+  });
+
+  it('is a flag on a new message, never pre-opened', async () => {
+    const messages = 'chats/alice_bob/messages';
+    await assertSucceeds(setDoc(doc(as('alice'), messages, 'a'), message({ viewOnce: true })));
+    await assertFails(setDoc(doc(as('alice'), messages, 'b'), message({ viewOnce: 'yes' })));
+    await assertFails(
+      setDoc(doc(as('alice'), messages, 'c'), message({ viewOnce: true, viewedAt: serverTimestamp() })),
+    );
+  });
+
+  it('is opened by the recipient alone, which wipes it for good', async () => {
+    const open = { ciphertext: deleteField(), nonce: deleteField(), viewedAt: serverTimestamp() };
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'once'), open));
+    await assertFails(updateDoc(doc(as('carol'), 'chats', CHAT, 'messages', 'once'), open));
+    // Opening must take the text away, not keep it.
+    await assertFails(
+      updateDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'once'), { viewedAt: serverTimestamp() }),
+    );
+    await assertSucceeds(updateDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'once'), open));
+    // Once only, and never on an ordinary message.
+    await assertFails(updateDoc(doc(as('bob'), 'chats', CHAT, 'messages', 'once'), open));
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'm1'), open));
+  });
+
+  it('cannot be edited into something viewable again', async () => {
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT, 'messages', 'once'), {
+        ciphertext: 'again',
+        nonce: 'n2',
+        editedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('marks the preview, which carries no text', async () => {
+    await assertSucceeds(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'once', senderId: 'alice', viewOnce: true },
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'once', senderId: 'alice', viewOnce: 'yes' },
+      }),
+    );
+  });
+});
+
+describe('the preview stays on the newest message', () => {
+  it('refuses an edit or delete of an older message rewriting it', async () => {
+    // Bob's newer message is the preview now.
+    await env.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore() as unknown as Firestore;
+      await updateDoc(doc(db, 'chats', CHAT), {
+        lastMessage: { id: 'newer', senderId: 'bob', ciphertext: 'c', nonce: 'n' },
+      });
+    });
+    // Alice's delete of her older message, queued offline, lands after it.
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'older', senderId: 'alice', deleted: true },
+      }),
+    );
+    // A new message still takes the preview, as it always has.
+    await assertSucceeds(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'newest', senderId: 'alice', ciphertext: 'c', nonce: 'n' },
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    // And the sender may still fix the preview of the message it shows.
+    await assertSucceeds(
+      updateDoc(doc(as('alice'), 'chats', CHAT), {
+        lastMessage: { id: 'newest', senderId: 'alice', deleted: true },
+      }),
+    );
+  });
+});
+
+describe('pinned message ids', () => {
+  it('must look like message ids', async () => {
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: ['a/b'] }));
+    await assertFails(updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: ['m1', 7] }));
+    await assertFails(
+      updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: ['m1', 'x'.repeat(41)] }),
+    );
+    await assertSucceeds(updateDoc(doc(as('alice'), 'chats', CHAT), { pinnedMessages: [] }));
+  });
+});
+
+describe('changing a username', () => {
+  const move = (uid: string, from: string, to: string, steps = { claim: true, release: true }) => {
+    const db = as(uid);
+    const batch = writeBatch(db);
+    if (steps.claim) batch.set(doc(db, 'usernames', to), { uid });
+    if (steps.release) batch.delete(doc(db, 'usernames', from));
+    batch.update(doc(db, 'users', uid), { username: to });
+    return batch.commit();
+  };
+
+  it('claims the new handle and releases the old one, together', async () => {
+    await assertSucceeds(move('alice', 'alice', 'alice_2'));
+    const claim = await getDoc(doc(as('carol'), 'usernames', 'alice_2'));
+    if (claim.data()?.uid !== 'alice') throw new Error('claim not moved');
+    // The old handle is free for anyone now.
+    const old = await getDoc(doc(as('carol'), 'usernames', 'alice'));
+    if (old.exists()) throw new Error('old handle not released');
+  });
+
+  it('cannot skip either half, take a handle in use, or pick a bad one', async () => {
+    await assertFails(move('alice', 'alice', 'alice_2', { claim: false, release: true }));
+    await assertFails(move('alice', 'alice', 'alice_2', { claim: true, release: false }));
+    await assertFails(move('alice', 'alice', 'bob'));
+    await assertFails(move('alice', 'alice', 'Bad Name'));
+    await assertFails(deleteDoc(doc(as('bob'), 'usernames', 'alice')));
+  });
+
+  it('keeps the public key fixed', async () => {
+    await assertFails(updateDoc(doc(as('alice'), 'users', 'alice'), { publicKey: 'pk-new' }));
+  });
+});

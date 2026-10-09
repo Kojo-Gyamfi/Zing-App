@@ -12,10 +12,13 @@ import { shareProfile } from '@/lib/share';
 import { DisappearingIcon, DisappearingPicker } from './Disappearing';
 import type { Presence } from '@/lib/db/presence';
 import type { UserDoc } from '@/lib/db/schema';
+import { MAX_NICKNAME } from '@/lib/names';
 
 /** The other person's profile, opened by tapping their name in a chat. */
 export function ChatInfoSheet({
   peer,
+  nickname,
+  onNickname,
   presence,
   blocked,
   onBlock,
@@ -24,6 +27,10 @@ export function ChatInfoSheet({
   onClose,
 }: {
   peer: UserDoc;
+  /** What I call them, only on my side (lib/names.ts); null when unset. */
+  nickname: string | null;
+  /** Null removes it. */
+  onNickname: (name: string | null) => void;
   presence: Presence;
   /** I have blocked them. */
   blocked: boolean;
@@ -59,6 +66,15 @@ export function ChatInfoSheet({
   }
 
   const [confirmingBlock, setConfirmingBlock] = useState(false);
+  // Null while not editing; the draft name otherwise.
+  const [nicknameDraft, setNicknameDraft] = useState<string | null>(null);
+  const name = nickname ?? peer.displayName;
+
+  function saveNickname() {
+    if (nicknameDraft === null) return;
+    onNickname(nicknameDraft.trim() ? nicknameDraft : null);
+    setNicknameDraft(null);
+  }
 
   function toggleBlock(on: boolean) {
     onBlock(on);
@@ -72,20 +88,17 @@ export function ChatInfoSheet({
     >
       <div
         role="dialog"
-        aria-label={`${peer.displayName}'s profile`}
+        aria-label={`${name}'s profile`}
         onClick={(event) => event.stopPropagation()}
         className="max-h-[92dvh] w-full max-w-md space-y-5 overflow-y-auto rounded-t-3xl border-t border-line
           bg-surface p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] scroll-thin md:rounded-3xl md:border"
       >
         <div className="flex flex-col items-center gap-3 text-center">
-          <Avatar
-            name={peer.displayName}
-            photoURL={peer.photoURL}
-            size={96}
-            online={presence.online}
-          />
+          <Avatar name={name} photoURL={peer.photoURL} size={96} online={presence.online} />
           <div>
-            <p className="text-xl font-semibold">{peer.displayName}</p>
+            <p className="text-xl font-semibold">{name}</p>
+            {/* With a nickname, their own name still shows -- as WhatsApp's "~". */}
+            {nickname && <p className="text-[14px] text-muted">~{peer.displayName}</p>}
             <p className="text-[14px] text-muted">@{peer.username}</p>
             <p className={`mt-1 text-[13px] ${presence.online ? 'text-zing' : 'text-faint'}`}>
               {lastSeenLabel(presence)}
@@ -94,6 +107,64 @@ export function ChatInfoSheet({
         </div>
 
         <dl className="divide-y divide-line rounded-2xl border border-line bg-void">
+          <div className="px-4 py-3">
+            <dt className="text-[12px] text-muted">Nickname · only you see it</dt>
+            {nicknameDraft === null ? (
+              <dd className="mt-0.5 flex items-center justify-between gap-3 text-[15px]">
+                <span className={`min-w-0 truncate ${nickname ? 'text-ink' : 'text-faint'}`}>
+                  {nickname ?? 'None'}
+                </span>
+                <button
+                  onClick={() => setNicknameDraft(nickname ?? '')}
+                  className="shrink-0 text-[13px] font-medium text-zing"
+                >
+                  {nickname ? 'Edit' : 'Add nickname'}
+                </button>
+              </dd>
+            ) : (
+              <dd className="mt-1.5 space-y-2">
+                <input
+                  autoFocus
+                  value={nicknameDraft}
+                  maxLength={MAX_NICKNAME}
+                  onChange={(event) => setNicknameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') saveNickname();
+                    if (event.key === 'Escape') setNicknameDraft(null);
+                  }}
+                  placeholder={peer.displayName}
+                  aria-label={`Nickname for ${peer.displayName}`}
+                  className="h-10 w-full rounded-xl bg-elevated px-3 text-[16px] text-ink placeholder:text-faint
+                    focus:outline-none focus:ring-1 focus:ring-zing"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setNicknameDraft(null)}
+                    className="h-9 flex-1 rounded-xl bg-elevated text-[13px] font-medium text-ink"
+                  >
+                    Cancel
+                  </button>
+                  {nickname && (
+                    <button
+                      onClick={() => {
+                        onNickname(null);
+                        setNicknameDraft(null);
+                      }}
+                      className="h-9 flex-1 rounded-xl bg-elevated text-[13px] font-medium text-danger"
+                    >
+                      Remove
+                    </button>
+                  )}
+                  <button
+                    onClick={saveNickname}
+                    className="h-9 flex-1 rounded-xl bg-zing text-[13px] font-semibold text-on-zing"
+                  >
+                    Save
+                  </button>
+                </div>
+              </dd>
+            )}
+          </div>
           <div className="px-4 py-3">
             <dt className="text-[12px] text-muted">About</dt>
             <dd className="mt-0.5 text-[15px] break-words text-ink">
@@ -158,7 +229,7 @@ export function ChatInfoSheet({
 
         {confirmingBlock ? (
           <div className="space-y-3 rounded-2xl border border-danger/40 bg-void p-4">
-            <p className="text-[14px] leading-relaxed text-ink">Block {peer.displayName}?</p>
+            <p className="text-[14px] leading-relaxed text-ink">Block {name}?</p>
             <p className="text-[13px] leading-relaxed text-muted">
               Neither of you can send messages in this chat until you unblock, and they lose your
               phone number and contacts-only photo. Your chat history stays.
@@ -183,7 +254,7 @@ export function ChatInfoSheet({
             onClick={() => (blocked ? toggleBlock(false) : setConfirmingBlock(true))}
             className="mx-auto block text-[13px] font-medium text-danger"
           >
-            {blocked ? `Unblock ${peer.displayName}` : `Block ${peer.displayName}`}
+            {blocked ? `Unblock ${name}` : `Block ${name}`}
           </button>
         )}
 

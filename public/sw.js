@@ -191,7 +191,7 @@ self.addEventListener('push', (event) => {
 
       // FCM nests data-only payloads under `data`.
       const message = payload.data ?? payload;
-      const { chatId, senderName, ciphertext, nonce } = message;
+      const { chatId, senderName, senderUid, ciphertext, nonce, viewOnce } = message;
       if (!chatId) return;
 
       // Say nothing only when this very conversation is on screen -- the
@@ -208,14 +208,19 @@ self.addEventListener('push', (event) => {
       // Null when this device cannot open it, or when the message was too long
       // to fit in a push and was sent without its ciphertext.
       const text = ciphertext && nonce ? await decryptPreview(chatId, ciphertext, nonce) : null;
-      const line = text ?? 'New message';
+      // A view-once message arrives with no ciphertext at all; say what it is.
+      const line = viewOnce === '1' ? 'View once message' : (text ?? 'New message');
 
       // One notification per conversation, growing as messages arrive:
       // "Kwame · 3 messages" with the latest few lines underneath.
       const [previous] = await self.registration.getNotifications({ tag: chatId });
       const count = (previous?.data?.count ?? 0) + 1;
       const lines = [...(previous?.data?.lines ?? []), line].slice(-5);
-      const name = senderName || 'Zing';
+      // My nickname for them, if I gave one: kept on this device by the app,
+      // because it is private and the push carries only their public name.
+      const nicknames = senderUid ? await readRecord('names', 'nicknames') : null;
+      const nickname = nicknames && typeof nicknames[senderUid] === 'string' ? nicknames[senderUid] : null;
+      const name = nickname || senderName || 'Zing';
 
       await self.registration.showNotification(count > 1 ? `${name} · ${count} messages` : name, {
         body: lines.join('\n'),

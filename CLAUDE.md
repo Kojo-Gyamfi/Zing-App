@@ -96,7 +96,11 @@ rather than letting every decryption fail mysteriously.
 ### Conventions worth not breaking
 
 - **Chat ids are deterministic**: `[uidA, uidB].sort().join('_')`. The same pair can never get two
-  conversations, and the peer is derivable from the id with no lookup.
+  conversations, and the peer is derivable from the id with no lookup. Use `lib/chatIds.ts`.
+- **"Message yourself" is `${uid}_${uid}` with `members: [uid]`**, sealed to the owner's key alone.
+  The rules accept that one-member shape at create and treat the owner as their own "peer" in
+  `unreadChangeOk`. There is no peer, so the thread skips typing, presence, receipts, push, mute,
+  block and message info (`isSelfChat`).
 - **Receipts are timestamps on the chat doc**, not per-message fields — `lastRead` and
   `lastDelivered` mean one write per event instead of one per message. Ticks are derived in
   `components/chat/Ticks.tsx#tickState`.
@@ -169,6 +173,31 @@ rather than letting every decryption fail mysteriously.
   sign-out.
 - **Link previews never fetch anything.** The card is built from the URL in the decrypted text
   (`lib/links.ts`). Fetching the page would need a server that learns every link sent.
+- **Nicknames are `nicknames.{uid}` on the account doc**: only the owner sees them. Show any
+  person's name through `nameFor(profile, useNicknames(), fallback)` (`lib/names.ts`), never
+  `displayName` directly. A nickname never goes through FCM: the push carries the sender's public
+  name and uid, and `public/sw.js` swaps in the nickname from the copy `components/NicknameCache.tsx`
+  keeps in IndexedDB (cleared at sign-out).
+- **Pinned messages are ids on the chat doc** (`pinnedMessages`, at most 3 well-formed ids, either
+  member, frozen while blocked). Deleting a message for everyone unpins it. The bar renders this device's decrypted copy; a pin older than the loaded pages
+  is fetched by id (`loadMessagesById`).
+- **View once** (`lib/viewOnce.ts`): `viewOnce: true` on the message. Opening it is the recipient
+  removing the ciphertext with `viewedAt` (the only shape the rules allow, and only for them), so
+  it is gone for both. Its text never goes into the preview, a push, search, quotes, copy, forward,
+  star or the info sheet. Edits are refused for it. The viewer (`ViewOnceSheet`) puts the text in
+  the page only while it's held, closes on blur, hide or a screenshot shortcut, can't be printed,
+  and watermarks the viewer's @handle. No web page can truly stop a screenshot; say so, don't
+  claim otherwise.
+- **Usernames can change**, but only as one transaction that claims the new handle, deletes the
+  old claim and updates the profile (`changeUsername`). The rules accept the profile's `username`
+  change only when `getAfter` shows the new claim is this user's and the old one is gone. The
+  public key never changes.
+- **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
+  replaces the header with the actions that fit every selected message. Bulk delete-for-me and
+  star are one write each (`hideMessages`, `setStarred` with an array).
+- **A preview change without a new message must keep the preview's id** (`previewStillNewest` in
+  the rules), so an edit or delete queued offline can't put an old message back over a newer one.
+  Edits and deletes write the preview separately, so a refused preview never fails the edit itself.
 - **Forwarding re-seals plaintext under the target chat's key**; nothing links the two conversations.
   The copy carries `forwarded: true` for the label — metadata like `replyTo`, set only at send time.
 - **The open thread takes its receipts from the chat list's listener** (`lib/store/chats.ts`) rather

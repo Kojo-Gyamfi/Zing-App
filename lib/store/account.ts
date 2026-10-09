@@ -42,6 +42,16 @@ export function watchAccount(
   };
 }
 
+const NO_NICKNAMES: Record<string, string> = {};
+
+/**
+ * My nicknames for other people (lib/names.ts nameFor turns a profile into
+ * the name to show). Never another account's, for the moment after a switch.
+ */
+export function useNicknames(): Record<string, string> {
+  return useAccount((state) => (state.owner ? state.settings.nicknames : NO_NICKNAMES));
+}
+
 /** This user's privacy settings, defaults until the doc is read. */
 export function usePrivacy() {
   return useAccount((state) => state.settings.privacy);

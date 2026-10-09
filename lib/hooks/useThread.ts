@@ -10,7 +10,7 @@ import {
   sendMessage as send,
   editMessage,
   deleteMessage,
-  hideMessage,
+  hideMessages,
   clearChat as clearChatFor,
   subscribeHidden,
   subscribeStarred,
@@ -21,6 +21,9 @@ import {
   removeExpiredMessage,
   DELETE_SLACK_MS,
   PAGE_SIZE,
+  markViewed,
+  setPinnedMessage,
+  loadMessagesById,
 } from '@/lib/db/messages';
 import { withReaction } from '@/lib/reactions';
 import { isHidden, NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
@@ -36,11 +39,14 @@ import { useAccount, usePrivacy } from '@/lib/store/account';
 import { setBlocked } from '@/lib/db/privacy';
 import { needsReadReceipt } from '@/lib/receipts';
 import { notifyPeers } from '@/lib/notify';
+import { isSelfChat } from '@/lib/chatIds';
 import { subscribePresence, subscribeTyping, setTyping, type Presence } from '@/lib/db/presence';
 import type { DecryptedMessage, UserDoc } from '@/lib/db/schema';
 
 const TYPING_THROTTLE = 2000;
 const NO_IDS: ReadonlySet<string> = new Set();
+const NO_PINS: string[] = [];
+const MESSAGE_ID = /^[A-Za-z0-9]{1,40}$/;
 const NO_PRESENCE: Presence = { online: false, lastSeen: null };
 
 /**
@@ -146,6 +152,8 @@ export function useThread(chatId: string, peerUid: string | null) {
   // from the chat list's listener, which already has this doc: a second
   // listener here would pay for every receipt twice (lib/store/chats.ts).
   const uid = user?.uid;
+  // "Message yourself": nobody to type at, notify or show receipts to.
+  const selfChat = isSelfChat(chatId, uid);
   const listReady = useChats((state) => uid !== undefined && state.owner === uid);
   const listed = useChats((state) => (state.owner === uid ? state.chats[chatId] : undefined));
   const listedConfirmed = useChats((state) =>
@@ -161,7 +169,7 @@ export function useThread(chatId: string, peerUid: string | null) {
     confirmed: ChatSummary | null | undefined;
   } | null>(null);
   useEffect(() => {
-    if (!peerUid || !listReady || inList) return;
+    if (!uid || !listReady || inList) return;
     return subscribeChat(chatId, (chat) =>
       setDirect((previous) => ({
         chatId,
@@ -175,7 +183,7 @@ export function useThread(chatId: string, peerUid: string | null) {
           : chat,
       })),
     );
-  }, [chatId, peerUid, listReady, inList]);
+  }, [chatId, uid, listReady, inList]);
 
   const ownDirect = !inList && direct?.chatId === chatId ? direct : null;
   const latest = inList ? listed : ownDirect?.latest;
@@ -184,6 +192,14 @@ export function useThread(chatId: string, peerUid: string | null) {
 
   // The disappearing-messages timer, in seconds; 0 is off.
   const disappearing = latest?.disappearing ?? 0;
+
+  // Pinned message ids, oldest pin first. Only well-formed ids: one that is
+  // not would make the fetch of the others fail.
+  const pinnedRaw = latest?.pinnedMessages;
+  const pinnedIds = useMemo(
+    () => (Array.isArray(pinnedRaw) ? pinnedRaw.filter((id) => typeof id === 'string' && MESSAGE_ID.test(id)) : NO_PINS),
+    [pinnedRaw],
+  );
 
   // Blocking, either way round. The rules refuse sends while either is set.
   const blockedByMe = Boolean(uid && latest?.blocked?.[uid]);
@@ -317,10 +333,10 @@ export function useThread(chatId: string, peerUid: string | null) {
   ]);
 
   const sendText = useCallback(
-    async (text: string, replyTo: string | null = null, forwarded = false) => {
+    async (text: string, replyTo: string | null = null, forwarded = false, viewOnce = false) => {
       if (!user || !conversationKey || !text.trim()) return;
 
-      setTyping(chatId, user.uid, false);
+      if (!selfChat) setTyping(chatId, user.uid, false);
       lastTypingPing.current = 0;
 
       const sentAt = new Date();
@@ -332,12 +348,16 @@ export function useThread(chatId: string, peerUid: string | null) {
         replyTo,
         forwarded,
         disappearAfter: disappearing,
+        // Nobody else in a chat with myself to see it once.
+        viewOnce: viewOnce && !selfChat,
       });
 
       committed.then(
         // Push only once the server has the message, so nobody is buzzed for
         // one that never landed. Offline, this waits for the reconnect.
-        () => void notifyPeers(chatId, envelope),
+        () => {
+          if (!selfChat) void notifyPeers(chatId, envelope, viewOnce);
+        },
         // Firestore has already rolled the local copy back; without this the
         // bubble would just vanish.
         () =>
@@ -351,6 +371,7 @@ export function useThread(chatId: string, peerUid: string | null) {
               createdAt: sentAt,
               replyTo,
               forwarded,
+              viewOnce,
               edited: false,
               deleted: false,
               pending: false,
@@ -359,7 +380,7 @@ export function useThread(chatId: string, peerUid: string | null) {
           ]),
       );
     },
-    [chatId, user, conversationKey, disappearing],
+    [chatId, user, conversationKey, disappearing, selfChat],
   );
 
   const retry = useCallback(
@@ -368,7 +389,7 @@ export function useThread(chatId: string, peerUid: string | null) {
       if (!message?.text) return;
 
       setFailed((current) => current.filter((entry) => entry.id !== id));
-      void sendText(message.text, message.replyTo, message.forwarded);
+      void sendText(message.text, message.replyTo, message.forwarded, message.viewOnce);
     },
     [failed, sendText],
   );
@@ -418,37 +439,48 @@ export function useThread(chatId: string, peerUid: string | null) {
 
       const before = older.find((message) => message.id === id);
       patchOlder(id, { text: null, deleted: true, edited: false });
-      deleteMessage({ chatId, messageId: id, senderId: user.uid, isLatest: isLatest(id) }).catch(
+      deleteMessage({
+        chatId,
+        messageId: id,
+        senderId: user.uid,
+        isLatest: isLatest(id),
+        pinned: pinnedIds.includes(id),
+      }).catch(
         () => {
           if (before) patchOlder(id, before);
           flash('Could not delete that message.');
         },
       );
     },
-    [chatId, user, older, isLatest, patchOlder, flash],
+    [chatId, user, older, isLatest, patchOlder, flash, pinnedIds],
   );
 
+  /** "Delete for me", for one message or several (one write either way). */
   const deleteForMe = useCallback(
-    (id: string) => {
+    (which: string | string[]) => {
       if (!user) return;
+      const ids = Array.isArray(which) ? which : [which];
+      if (ids.length === 0) return;
 
-      // Hide straight away; the listener confirms, and a refusal puts it back.
-      setHidden((current) =>
-        current.chatId === chatId
-          ? { chatId, list: { ...current.list, ids: new Set(current.list.ids).add(id) } }
-          : current,
-      );
-      hideMessage(chatId, user.uid, id).catch(() => {
+      // Hide straight away; the listener confirms, and a refusal puts them back.
+      setHidden((current) => {
+        if (current.chatId !== chatId) return current;
+        const next = new Set(current.list.ids);
+        ids.forEach((id) => next.add(id));
+        return { chatId, list: { ...current.list, ids: next } };
+      });
+      hideMessages(chatId, user.uid, ids).catch(() => {
         setHidden((current) => {
-          const ids = new Set(current.list.ids);
-          ids.delete(id);
-          return { ...current, list: { ...current.list, ids } };
+          const next = new Set(current.list.ids);
+          ids.forEach((id) => next.delete(id));
+          return { ...current, list: { ...current.list, ids: next } };
         });
-        flash('Could not delete that message.');
+        flash(ids.length > 1 ? 'Could not delete those messages.' : 'Could not delete that message.');
       });
       // A message deleted for me should not live on under Starred.
-      if (starred.chatId === chatId && starred.ids.has(id)) {
-        void setStarred(chatId, user.uid, id, false).catch(() => undefined);
+      const starredHere = starred.chatId === chatId ? ids.filter((id) => starred.ids.has(id)) : [];
+      if (starredHere.length) {
+        void setStarred(chatId, user.uid, starredHere, false).catch(() => undefined);
       }
     },
     [chatId, user, flash, starred],
@@ -489,10 +521,10 @@ export function useThread(chatId: string, peerUid: string | null) {
   );
 
   const toggleStar = useCallback(
-    (id: string, on: boolean) => {
+    (id: string | string[], on: boolean) => {
       if (!user) return;
       setStarred(chatId, user.uid, id, on).catch(() =>
-        flash(on ? 'Could not star that message.' : 'Could not unstar that message.'),
+        flash(on ? 'Could not star that.' : 'Could not unstar that.'),
       );
     },
     [chatId, user, flash],
@@ -522,7 +554,9 @@ export function useThread(chatId: string, peerUid: string | null) {
         disappearAfter: useChats.getState().chats[target]?.disappearing ?? 0,
       });
       committed.then(
-        () => void notifyPeers(target, envelope),
+        () => {
+          if (!isSelfChat(target, user.uid)) void notifyPeers(target, envelope);
+        },
         () => undefined,
       );
       return true;
@@ -555,13 +589,13 @@ export function useThread(chatId: string, peerUid: string | null) {
 
   /** Throttled: one RTDB write every couple of seconds, not one per keystroke. */
   const ping = useCallback(() => {
-    if (!user) return;
+    if (!user || selfChat) return;
     const now = Date.now();
     if (now - lastTypingPing.current < TYPING_THROTTLE) return;
 
     lastTypingPing.current = now;
     setTyping(chatId, user.uid, true);
-  }, [chatId, user]);
+  }, [chatId, user, selfChat]);
 
   const loadOlder = useCallback(async () => {
     // Every scroll event near the top calls this; without the guard each one
@@ -589,9 +623,9 @@ export function useThread(chatId: string, peerUid: string | null) {
   // Clear typing if the tab goes away mid-sentence.
   useEffect(() => {
     return () => {
-      if (user) setTyping(chatId, user.uid, false);
+      if (user && !selfChat) setTyping(chatId, user.uid, false);
     };
-  }, [chatId, user]);
+  }, [chatId, user, selfChat]);
 
   // Disappearing messages leave the screen the moment they expire: a timer
   // for the next one due (re-armed at least hourly, since setTimeout cannot
@@ -649,6 +683,82 @@ export function useThread(chatId: string, peerUid: string | null) {
   const thread = [...olderOnce, ...messages].filter(
     (message) => !isHidden(message, hiddenList) && !hasExpired(message, now),
   );
+
+  // Pinned messages, oldest pin first. Rendered from the thread when loaded;
+  // a pin older than the loaded pages is fetched by id, once (a read or three
+  // when the pins change, not a listener).
+  // Null for an id that was asked for and is not there (deleted outright).
+  const [pinnedExtra, setPinnedExtra] = useState<{
+    chatId: string;
+    byId: Map<string, DecryptedMessage | null>;
+  }>({
+    chatId,
+    byId: new Map(),
+  });
+  const loadedIds = new Set(thread.map((message) => message.id));
+  const missingPins = pinnedIds.filter(
+    (id) => !loadedIds.has(id) && !(pinnedExtra.chatId === chatId && pinnedExtra.byId.has(id)),
+  );
+  const missingKey = missingPins.join(' ');
+  useEffect(() => {
+    if (!conversationKey || !missingKey) return;
+    let live = true;
+    const wanted = missingKey.split(' ');
+    void loadMessagesById(chatId, wanted, conversationKey)
+      .then((found) => {
+        if (!live) return;
+        setPinnedExtra((current) => {
+          const byId = new Map(current.chatId === chatId ? current.byId : []);
+          wanted.forEach((id) => byId.set(id, null));
+          found.forEach((message) => byId.set(message.id, message));
+          return { chatId, byId };
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [chatId, conversationKey, missingKey]);
+
+  const pinned = pinnedIds
+    .map((id) =>
+      thread.find((message) => message.id === id) ??
+      (pinnedExtra.chatId === chatId ? pinnedExtra.byId.get(id) : undefined),
+    )
+    .filter(
+      (message): message is DecryptedMessage =>
+        message !== undefined &&
+        message !== null &&
+        !message.deleted &&
+        !message.viewOnce &&
+        !isHidden(message, hiddenList) &&
+        !hasExpired(message, now),
+    );
+
+  const togglePin = (id: string, on: boolean) => {
+    // Slots held by pins that show nothing any more -- deleted, expired, gone
+    // -- are freed first, so pinning a fourth never pushes out a visible one.
+    // Ones I merely hid stay: they are still the other person's pins.
+    const gone = (pinId: string) => {
+      const known =
+        thread.find((message) => message.id === pinId) ??
+        (pinnedExtra.chatId === chatId ? pinnedExtra.byId.get(pinId) : undefined);
+      return known === null || (known !== undefined && (known.deleted || hasExpired(known, now)));
+    };
+    const current = pinnedIds.filter((pinId) => !gone(pinId));
+    void setPinnedMessage(chatId, id, on, current).catch(() =>
+      flash(on ? 'Could not pin that message.' : 'Could not unpin that message.'),
+    );
+  };
+
+  /**
+   * I opened a view-once message: its ciphertext goes from the server now.
+   * The page keeps the text it already has on screen until it is closed.
+   */
+  const openViewOnce = (id: string) => {
+    patchOlder(id, { viewed: true });
+    void markViewed(chatId, id).catch(() => undefined);
+  };
   const failedHere = failed.filter(
     (entry) => entry.chatId === chatId && !thread.some((message) => message.id === entry.id),
   );
@@ -676,6 +786,11 @@ export function useThread(chatId: string, peerUid: string | null) {
     setBlock,
     /** Disappearing-messages timer in seconds, 0 when off. */
     disappearing,
+    /**
+     * The chat doc has been read. Until then the timer above is a guess of 0,
+     * and a message sent in a disappearing chat would last forever.
+     */
+    chatKnown: latest !== undefined,
     setDisappearing: setTimer,
     presence: showPresence ? presence : NO_PRESENCE,
     peerTyping: peerTyping && !blocked,
@@ -689,6 +804,11 @@ export function useThread(chatId: string, peerUid: string | null) {
     deleteForEveryone,
     deleteForMe,
     clearChat,
+    openViewOnce,
+    /** Pinned messages, oldest pin first, as this device can show them. */
+    pinned,
+    pinnedIds,
+    togglePin,
     react,
     starredIds: starred.chatId === chatId ? starred.ids : NO_IDS,
     toggleStar,

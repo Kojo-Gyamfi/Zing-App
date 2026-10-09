@@ -12,7 +12,12 @@ import type { Envelope } from '@/lib/crypto/types';
  * Best-effort by design: a failure here means someone misses a buzz, not a
  * lost message, so it never blocks or surfaces an error.
  */
-export async function notifyPeers(chatId: string, envelope: Envelope): Promise<void> {
+export async function notifyPeers(
+  chatId: string,
+  envelope: Envelope,
+  /** A view-once message: the server pushes a label, never the ciphertext. */
+  viewOnce = false,
+): Promise<void> {
   const user = auth().currentUser;
   if (!user) return;
 
@@ -23,7 +28,7 @@ export async function notifyPeers(chatId: string, envelope: Envelope): Promise<v
         'content-type': 'application/json',
         authorization: `Bearer ${await user.getIdToken()}`,
       },
-      body: JSON.stringify({ chatId, ...envelope }),
+      body: JSON.stringify({ chatId, ...envelope, ...(viewOnce ? { viewOnce: true } : {}) }),
     });
   } catch {
     // Offline, or push not configured yet.

@@ -18,16 +18,15 @@ import { createConversationKey, sealConversationKey, openConversationKey } from 
 import { fromB64 } from '@/lib/crypto/codec';
 import { saveSealedKey } from '@/lib/crypto/vault';
 import type { Identity } from '@/lib/crypto/types';
+import { directChatId } from '@/lib/chatIds';
 import type { ChatDoc, UserDoc } from './schema';
 
 /**
  * Direct chats use a deterministic id built from the two uids, so the same
  * pair can never end up with two parallel conversations no matter who opens
- * it first.
+ * it first. See lib/chatIds.ts, which also covers "Message yourself".
  */
-export function directChatId(a: string, b: string): string {
-  return [a, b].sort().join('_');
-}
+export { directChatId };
 
 /**
  * Create the chat and seal its conversation key to both members.
@@ -45,12 +44,14 @@ export async function ensureDirectChat(
 ): Promise<string> {
   const chatId = directChatId(me.uid, peer.uid);
   const chatRef = doc(db(), 'chats', chatId);
+  // "Message yourself": one member, `${uid}_${uid}`, sealed to my key alone.
+  const members = me.uid === peer.uid ? [me.uid] : [me.uid, peer.uid].sort();
 
   const created = await runTransaction(db(), async (transaction) => {
     if ((await transaction.get(chatRef)).exists()) return false;
 
     transaction.set(chatRef, {
-      members: [me.uid, peer.uid].sort(),
+      members,
       lastMessage: null,
       lastRead: {},
       lastDelivered: {},
@@ -100,7 +101,9 @@ async function writeKeys(
 
   const batch = writeBatch(db());
   batch.set(doc(db(), 'chats', chatId, 'keys', me.uid), { sealed: mineSealed });
-  batch.set(doc(db(), 'chats', chatId, 'keys', peer.uid), { sealed: theirsSealed });
+  if (peer.uid !== me.uid) {
+    batch.set(doc(db(), 'chats', chatId, 'keys', peer.uid), { sealed: theirsSealed });
+  }
   try {
     await batch.commit();
   } catch (cause) {

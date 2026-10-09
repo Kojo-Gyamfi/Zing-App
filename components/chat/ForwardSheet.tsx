@@ -3,6 +3,9 @@
 import { useMemo, useState } from 'react';
 import { useChats } from '@/lib/store/chats';
 import { useProfiles } from '@/lib/store/profiles';
+import { useSession } from '@/lib/store/session';
+import { useMyPhoto, useNicknames } from '@/lib/store/account';
+import { nameFor } from '@/lib/names';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 
@@ -28,6 +31,9 @@ export function ForwardSheet({
   const chats = useChats((state) => (state.owner === me ? state.chats : null));
   const profiles = useProfiles((state) => state.profiles);
   const missing = useProfiles((state) => state.missing);
+  const nicknames = useNicknames();
+  const myProfile = useSession((state) => state.profile);
+  const myPhoto = useMyPhoto(myProfile?.photoURL);
   const [filter, setFilter] = useState('');
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,21 +43,28 @@ export function ForwardSheet({
     return Object.values(chats ?? {})
       .map((chat) => {
         const peerUid = chat.members.find((member) => member !== me) ?? null;
-        return { chat, peer: peerUid ? profiles[peerUid] : undefined, gone: peerUid ? missing[peerUid] : false };
+        const self = chat.members.length === 1;
+        const peer = peerUid ? profiles[peerUid] : undefined;
+        return {
+          chat,
+          self,
+          name: self ? `${myProfile?.displayName ?? 'Me'} (You)` : nameFor(peer, nicknames, ''),
+          handle: self ? 'Message yourself' : peer ? `@${peer.username}` : '',
+          photoURL: self ? myPhoto : peer?.photoURL,
+          ok: self || Boolean(peer && !(peerUid && missing[peerUid])),
+        };
       })
       // A blocked chat would refuse the message.
-      .filter((row) => row.peer && !row.gone && Object.keys(row.chat.blocked ?? {}).length === 0)
+      .filter((row) => row.ok && Object.keys(row.chat.blocked ?? {}).length === 0)
       .filter(
         (row) =>
-          !needle ||
-          row.peer!.displayName.toLowerCase().includes(needle) ||
-          row.peer!.username.includes(needle),
+          !needle || row.name.toLowerCase().includes(needle) || row.handle.toLowerCase().includes(needle),
       )
       .sort(
         (a, b) =>
           (b.chat.updatedAt?.toDate?.().getTime() ?? 0) - (a.chat.updatedAt?.toDate?.().getTime() ?? 0),
       );
-  }, [chats, profiles, missing, me, filter]);
+  }, [chats, profiles, missing, me, filter, nicknames, myProfile, myPhoto]);
 
   async function pick(chatId: string) {
     if (sending) return;
@@ -112,7 +125,7 @@ export function ForwardSheet({
               {filter.trim() ? 'No chats match that.' : 'No chats to forward to yet.'}
             </li>
           )}
-          {rows.map(({ chat, peer }) => (
+          {rows.map(({ chat, name, handle, photoURL }) => (
             <li key={chat.id}>
               <button
                 onClick={() => void pick(chat.id)}
@@ -120,10 +133,10 @@ export function ForwardSheet({
                 className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors
                   hover:bg-elevated disabled:opacity-60"
               >
-                <Avatar name={peer!.displayName} photoURL={peer!.photoURL} size={40} />
+                <Avatar name={name} photoURL={photoURL} size={40} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{peer!.displayName}</span>
-                  <span className="block truncate text-[13px] text-muted">@{peer!.username}</span>
+                  <span className="block truncate font-medium">{name}</span>
+                  <span className="block truncate text-[13px] text-muted">{handle}</span>
                 </span>
                 {sending === chat.id && <Spinner />}
               </button>

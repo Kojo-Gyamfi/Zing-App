@@ -20,8 +20,9 @@ export function Composer({
   onCancelContext,
   draft = '',
   onDraftChange,
+  allowViewOnce = false,
 }: {
-  onSend: (text: string) => void | Promise<void>;
+  onSend: (text: string, options: { viewOnce: boolean }) => void | Promise<void>;
   onTyping: () => void;
   disabled?: boolean;
   /** Placeholder while disabled; defaults to the key-exchange wait. */
@@ -32,8 +33,13 @@ export function Composer({
   draft?: string;
   /** Every change to the unsent text -- not while editing a sent message. */
   onDraftChange?: (text: string) => void;
+  /** Offer the view-once switch (not in a chat with myself). */
+  allowViewOnce?: boolean;
 }) {
+  // The next message goes as view once (lib/viewOnce.ts). Off after each
+  // send, as on WhatsApp, so it is never left on by accident.
   const [text, setText] = useState(draft);
+  const [viewOnce, setViewOnce] = useState(false);
   // What was being typed before an edit took over the box, put back after.
   const [kept, setKept] = useState(draft);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -100,7 +106,9 @@ export function Composer({
     setText('');
     caret.current = null;
     requestAnimationFrame(grow);
-    void onSend(value);
+    const once = viewOnce && !editing && allowViewOnce;
+    setViewOnce(false);
+    void onSend(value, { viewOnce: once });
   }
 
   const isTouch = () => 'ontouchstart' in window;
@@ -267,13 +275,45 @@ export function Composer({
                 submit();
               }
             }}
-            placeholder={disabled ? (disabledText ?? 'Securing this chat…') : 'Message'}
+            placeholder={
+              disabled
+                ? (disabledText ?? 'Securing this chat…')
+                : viewOnce && !editing
+                  ? 'View once message'
+                  : 'Message'
+            }
             maxLength={MAX_MESSAGE_LENGTH}
             /* 16px keeps iOS from zooming the viewport when the field takes focus. */
-            className="max-h-[140px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-3 pr-4
+            className={`max-h-[140px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-3
               text-[16px] leading-snug text-ink placeholder:text-faint
-              focus:outline-none disabled:opacity-50"
+              focus:outline-none disabled:opacity-50 ${allowViewOnce && !editing ? 'pr-1' : 'pr-4'}`}
           />
+          {allowViewOnce && !editing && (
+            <button
+              type="button"
+              onClick={() => setViewOnce((on) => !on)}
+              disabled={disabled}
+              aria-label="View once"
+              aria-pressed={viewOnce}
+              title={viewOnce ? 'View once is on: they can open it a single time' : 'Send as view once'}
+              className={`mr-1 grid size-11 shrink-0 place-items-center rounded-full transition-colors
+                disabled:opacity-50 ${viewOnce ? 'text-zing' : 'text-muted hover:text-ink'}`}
+            >
+              <svg viewBox="0 0 24 24" className="size-[22px]" aria-hidden="true">
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="9"
+                  fill={viewOnce ? 'currentColor' : 'none'}
+                  fillOpacity={viewOnce ? 0.18 : 0}
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeDasharray="4 2.2"
+                />
+                <path d="M10.5 9.5 12.5 8v8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
 
         <button

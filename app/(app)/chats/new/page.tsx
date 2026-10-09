@@ -4,16 +4,18 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from '@/lib/store/session';
-import { findByUsername, findByPhone, normalizeUsername } from '@/lib/db/users';
+import { findByUsername, findByPhone, normalizeUsername, USERNAME_PATTERN } from '@/lib/db/users';
 import { ensureDirectChat } from '@/lib/db/chats';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import type { UserDoc } from '@/lib/db/schema';
+import { useMyPhoto } from '@/lib/store/account';
 
 export default function NewChatPage() {
   const router = useRouter();
-  const { user, identity } = useSession();
+  const { user, identity, profile } = useSession();
+  const myPhoto = useMyPhoto(profile?.photoURL);
 
   const [term, setTerm] = useState('');
   const [result, setResult] = useState<UserDoc | null>(null);
@@ -31,12 +33,17 @@ export default function NewChatPage() {
     setError(null);
 
     try {
-      // A leading + or digits means they typed a number; anything else is a handle.
-      const found = /^[+\d]/.test(query)
-        ? await findByPhone(query)
-        : await findByUsername(normalizeUsername(query));
+      // A leading + or digit may be a number; anything else is a handle.
+      // Handles may start with a digit too ("2fast"), so one that is no
+      // number's owner is tried as a handle as well.
+      const handle = normalizeUsername(query);
+      let found = /^[+\d]/.test(query) ? await findByPhone(query) : null;
+      if (!found && !query.startsWith('+') && USERNAME_PATTERN.test(handle)) {
+        found = await findByUsername(handle);
+      }
 
-      setResult(found && found.uid !== user?.uid ? found : null);
+      // Finding myself is fine: that is the chat with myself.
+      setResult(found);
       setSearched(true);
     } catch {
       // Offline with nothing cached: say so rather than spin forever.
@@ -96,6 +103,24 @@ export default function NewChatPage() {
           </Button>
         </div>
 
+        {profile && (
+          <button
+            onClick={() => void start(profile)}
+            disabled={starting}
+            className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface p-3 text-left
+              transition-colors hover:bg-elevated disabled:opacity-60"
+          >
+            <Avatar name={profile.displayName} photoURL={myPhoto} size={44} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-semibold">Message yourself</span>
+              <span className="block truncate text-[13px] text-muted">
+                Notes, links and reminders, only you can read
+              </span>
+            </span>
+            {starting && <Spinner />}
+          </button>
+        )}
+
         <p className="text-[12px] leading-relaxed text-faint">
           Zing can&apos;t read your phone&apos;s contacts — no website can. Ask your friend for their
           @username, or their number if they added one.
@@ -121,12 +146,15 @@ export default function NewChatPage() {
             <Avatar name={result.displayName} photoURL={result.photoURL} size={52} />
 
             <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{result.displayName}</p>
+              <p className="truncate font-semibold">
+                {result.displayName}
+                {result.uid === user?.uid && ' (You)'}
+              </p>
               <p className="truncate text-[13px] text-muted">@{result.username}</p>
             </div>
 
             <Button onClick={() => start(result)} busy={starting}>
-              Chat
+              {result.uid === user?.uid ? 'Message yourself' : 'Chat'}
             </Button>
           </div>
         )}

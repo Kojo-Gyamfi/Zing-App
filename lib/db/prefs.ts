@@ -16,6 +16,7 @@ import {
   type ChatTheme,
 } from '@/lib/appearance';
 import { muteEnds, type MuteDuration } from '@/lib/mute';
+import { cleanNickname, toNicknames } from '@/lib/names';
 import { DEFAULT_PRIVACY, type AccountDoc, type Privacy } from './schema';
 
 /**
@@ -54,6 +55,8 @@ export type AccountSettings = {
   appearance: Appearance;
   /** Per-chat wallpaper and bubble colour, by chat id. */
   chatThemes: Record<string, ChatTheme>;
+  /** My names for other people, by uid. */
+  nicknames: Record<string, string>;
 };
 
 export const NO_ACCOUNT: AccountSettings = {
@@ -63,6 +66,7 @@ export const NO_ACCOUNT: AccountSettings = {
   photoURL: undefined,
   appearance: DEFAULT_APPEARANCE,
   chatThemes: {},
+  nicknames: {},
 };
 
 const accountRef = (uid: string) => doc(db(), 'users', uid, 'private', 'account');
@@ -102,6 +106,7 @@ export function subscribeAccount(
           photoURL: data?.photoURL,
           appearance: toAppearance(data?.appearance),
           chatThemes: toChatThemes(data?.chatThemes),
+          nicknames: toNicknames(data?.nicknames),
         },
         snapshot.exists() || !snapshot.metadata.fromCache,
       );
@@ -161,6 +166,15 @@ export async function setChatTheme(
       )
     : deleteField();
   await setDoc(accountRef(uid), { chatThemes: { [chatId]: theme } }, { merge: true });
+}
+
+/**
+ * Give someone a nickname only I see, or take it away with null (or a blank
+ * name). Never shown to them: it lives on my owner-only account doc.
+ */
+export async function setNickname(uid: string, peerUid: string, name: string | null): Promise<void> {
+  const clean = name === null ? null : cleanNickname(name);
+  await setDoc(accountRef(uid), { nicknames: { [peerUid]: clean ?? deleteField() } }, { merge: true });
 }
 
 /** Theme or wallpaper. Merged field by field, so one never resets the other. */

@@ -188,3 +188,10 @@ input:-webkit-autofill {
 [data-bubble='amber'] {
   --color-bubble-out: color-mix(in oklab, var(--color-bubble-in) 70%, #d99a2b);
 }
+
+/* A view-once message never prints, nor saves as a PDF. ViewOnceSheet. */
+@media print {
+  [data-view-once] {
+    display: none !important;
+  }
+}

@@ -38,6 +38,8 @@ const MENU_ICONS = {
 export function ChatMenu({
   name,
   canBlock,
+  canMute = true,
+  selfChat = false,
   blocked,
   muteStatus,
   disappearing,
@@ -62,6 +64,10 @@ export function ChatMenu({
   name: string;
   /** False for a deleted account: nobody to block. */
   canBlock: boolean;
+  /** False in a chat with myself: nothing there ever sends a push. */
+  canMute?: boolean;
+  /** "Message yourself": nobody else to mention. */
+  selfChat?: boolean;
   /** I have blocked them. */
   blocked: boolean;
   muteStatus: string | null;
@@ -118,7 +124,9 @@ export function ChatMenu({
         <div className="space-y-3 px-2 pb-1">
           <p className="text-[13px] leading-relaxed text-muted">
             {onDisappearing
-              ? 'New messages vanish for both of you this long after they’re sent. Either of you can change it. Messages already sent keep their own timer.'
+              ? selfChat
+                ? 'New notes vanish this long after you write them. Ones already here keep their own timer.'
+                : 'New messages vanish for both of you this long after they’re sent. Either of you can change it. Messages already sent keep their own timer.'
               : 'The timer can’t be changed while this chat is blocked.'}
           </p>
           <DisappearingPicker value={disappearing} onChange={onDisappearing} />
@@ -200,7 +208,7 @@ export function ChatMenu({
           </p>
           <p className="text-[14px] leading-relaxed text-muted">
             {clearing
-              ? `Every message in this chat will be removed from your account, on all your devices. This can’t be undone. ${name} keeps their copy.`
+              ? `Every message in this chat will be removed from your account, on all your devices. This can’t be undone.${selfChat ? '' : ` ${name} keeps their copy.`}`
               : 'Neither of you can send messages in this chat until you unblock, and they lose your phone number and contacts-only photo. Your chat history stays.'}
           </p>
           <div className="flex gap-2 pt-1">
@@ -229,17 +237,19 @@ export function ChatMenu({
         {onContactInfo && (
           <SheetItem
             label="Contact info"
-            hint="Profile, phone number and encryption check"
+            hint="Profile, nickname, phone number and encryption check"
             icon={MENU_ICONS.info}
             onClick={done(onContactInfo)}
           />
         )}
-        <SheetItem
-          label={muteStatus ? 'Muted' : 'Mute notifications'}
-          hint={muteStatus ?? '8 hours, 1 week or always'}
-          icon={muteStatus ? ICONS.mute : ICONS.unmute}
-          onClick={() => setView('mute')}
-        />
+        {canMute && (
+          <SheetItem
+            label={muteStatus ? 'Muted' : 'Mute notifications'}
+            hint={muteStatus ?? '8 hours, 1 week or always'}
+            icon={muteStatus ? ICONS.mute : ICONS.unmute}
+            onClick={() => setView('mute')}
+          />
+        )}
         <SheetItem
           label="Disappearing messages"
           hint={disappearingLabel(disappearing)}
