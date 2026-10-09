@@ -9,7 +9,7 @@ import { loadStarredMessages, setStarred, DELETED_LABEL, type StarredMessage } f
 import { listTime } from '@/lib/format';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { ForwardedLabel } from '@/components/chat/MessageBubble';
+import { FormattedText, ForwardedLabel } from '@/components/chat/MessageBubble';
 import type { UserDoc } from '@/lib/db/schema';
 
 /**
@@ -121,7 +121,7 @@ export default function StarredPage() {
                       ) : message.text === null ? (
                         <em className="text-muted">Can&apos;t be decrypted on this device</em>
                       ) : (
-                        message.text
+                        <FormattedText text={message.text} />
                       )}
                     </span>
                   </Link>

@@ -1,9 +1,11 @@
 @import "tailwindcss";
 
 /*
- * Zing is dark-only by design. There is no light theme and no toggle --
- * committing to one surface keeps the bubble contrast tuned and stops
- * every component carrying two sets of colours.
+ * Two themes, one set of names. Components only ever use the tokens below;
+ * the light theme redefines them under :root[data-theme='light'], so nothing
+ * carries two sets of colours. Dark is the default and the one the palette
+ * was designed around. lib/appearance.ts sets data-theme (and data-wallpaper),
+ * already resolved from "System", before the first paint.
  */
 
 @theme {
@@ -30,6 +32,11 @@
   --color-bubble-out: #063934;
   --color-bubble-in: #1a2225;
 
+  /* Behind the messages, under the wallpaper. */
+  --color-canvas: #0b0f10;
+  /* Recessed panels inside a bubble: the quote of a reply, a link card. */
+  --color-inset: rgb(0 0 0 / 0.2);
+
   --color-danger: #ff5f57;
 
   /* Motion: short and snappy. The name of the app is a promise about speed. */
@@ -38,6 +45,38 @@
 
 :root {
   color-scheme: dark;
+}
+
+/*
+ * Light: white surfaces on a cool grey, and a deeper teal. The logo's own
+ * #00cfc1 is under 2:1 on white, so as text (names, links, "typing…") it would
+ * be unreadable; #00857b keeps the hue at 4.5:1, and white text on it as well.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-void: #f2f5f5;
+  --color-surface: #ffffff;
+  --color-elevated: #e6ecec;
+  --color-line: #d6dfe0;
+
+  --color-ink: #0e1a1c;
+  --color-muted: #51666a;
+  --color-faint: #73878a;
+
+  --color-zing: #00857b;
+  --color-zing-dim: #006d65;
+  --color-zing-soft: #00766d;
+  --color-on-zing: #ffffff;
+
+  --color-bubble-out: #d2f2ec;
+  --color-bubble-in: #ffffff;
+
+  /* A shade darker than the app, so white incoming bubbles stand off it. */
+  --color-canvas: #e4ebea;
+  --color-inset: rgb(0 0 0 / 0.05);
+
+  --color-danger: #d63a31;
 }
 
 html,
@@ -87,13 +126,38 @@ input:-webkit-autofill {
   scrollbar-color: var(--color-line) transparent;
 }
 
-/* WhatsApp-style doodle wallpaper behind a conversation. It stays put while
-   the messages scroll over it, as WhatsApp's does. The 320px tile is drawn
+/* The wallpaper behind a conversation, chosen in Settings (lib/appearance.ts
+   lists them). The default is WhatsApp-style doodles: the 320px tile is drawn
    down to 180px so each doodle lands around 20px, WhatsApp's scale. The tile
-   comes from scripts/gen-chat-doodles.mjs -- edit that, not the SVG. */
+   comes from scripts/gen-chat-doodles.mjs -- edit that, not the SVG. Its inks
+   are faint enough to sit on either theme. The tints are mixed into the
+   theme's canvas, so each one follows light and dark on its own.
+
+   Each choice is an attribute selector rather than :root only, so a Settings
+   swatch can carry its own data-wallpaper and preview it. */
 @utility chat-wallpaper {
-  background-color: var(--color-void);
-  background-image: url('/chat-doodles.svg');
+  background-color: var(--wallpaper-color);
+  background-image: var(--wallpaper-image);
   background-size: 180px 180px;
   background-repeat: repeat;
+}
+
+[data-wallpaper] {
+  --wallpaper-color: var(--color-canvas);
+  --wallpaper-image: none;
+}
+[data-wallpaper='doodles'] {
+  --wallpaper-image: url('/chat-doodles.svg');
+}
+[data-wallpaper='ocean'] {
+  --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #2f7fd8);
+}
+[data-wallpaper='forest'] {
+  --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #2e9b5f);
+}
+[data-wallpaper='dusk'] {
+  --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #8a5cd6);
+}
+[data-wallpaper='sand'] {
+  --wallpaper-color: color-mix(in oklab, var(--color-canvas) 84%, #c79a4a);
 }

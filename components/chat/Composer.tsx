@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EmojiPanel } from './EmojiPanel';
 import { MAX_MESSAGE_LENGTH } from '@/lib/db/schema';
+import { plainText } from '@/lib/formatting';
 
 /** What the next send means, besides "a new message". */
 export type ComposerContext =
@@ -183,8 +184,8 @@ export function Composer({
             </p>
             <p className="truncate text-[13px] text-muted">
               {context.kind === 'reply'
-                ? (context.text ?? 'Message')
-                : context.text}
+                ? (context.text !== null ? plainText(context.text) : 'Message')
+                : plainText(context.text)}
             </p>
           </div>
           <button

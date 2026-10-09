@@ -120,7 +120,7 @@ function Toggle({
         className={`relative mt-0.5 h-6 w-10 shrink-0 rounded-full transition-colors ${on ? 'bg-zing' : 'bg-line'}`}
       >
         <span
-          className={`absolute top-0.5 size-5 rounded-full bg-ink transition-[left] ${on ? 'left-[18px]' : 'left-0.5'}`}
+          className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-[left] ${on ? 'left-[18px]' : 'left-0.5'}`}
         />
       </span>
     </button>

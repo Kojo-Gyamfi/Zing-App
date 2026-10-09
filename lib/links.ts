@@ -13,9 +13,10 @@ export type TextRun = { text: string; href?: string };
 
 // http(s) URLs and bare www. addresses, up to whitespace or a closing angle
 // bracket. Trailing punctuation is trimmed below: "see example.com." should
-// not link the full stop.
+// not link the full stop. Formatting markers count as punctuation too, so a
+// link inside *bold* stops before the asterisk (lib/formatting.ts).
 const LINK = /\b(?:https?:\/\/|www\.)[^\s<>]+/gi;
-const TRAILING = /[.,;:!?'"”’)\]]+$/;
+const TRAILING = /[.,;:!?'"”’)\]*_~`]+$/;
 
 /** The text split into plain runs and links. Only http(s) ever becomes a link. */
 export function splitLinks(text: string): TextRun[] {

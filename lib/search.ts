@@ -20,24 +20,32 @@ export function findMatches(messages: DecryptedMessage[], query: string): string
 }
 
 /**
- * Splits text into runs, marking the ones that match, for highlighting. Runs
- * index into the original text, so accents and case show as typed. Assumes
- * normalising does not change a string's length, which holds for the
- * accented letters people write; when it does not, nothing is highlighted
- * rather than the wrong letters.
+ * Where the query occurs in the text, as [start, end) offsets into the
+ * original, so accents and case show as typed. Assumes normalising does not
+ * change a string's length, which holds for the accented letters people
+ * write; when it does not, nothing is found rather than the wrong letters.
  */
-export function splitMatches(text: string, query: string): { text: string; match: boolean }[] {
+export function matchRanges(text: string, query: string): [number, number][] {
   const needle = normalizeForSearch(query.trim());
   const haystack = normalizeForSearch(text);
-  if (!needle || haystack.length !== text.length) return [{ text, match: false }];
+  if (!needle || haystack.length !== text.length) return [];
 
+  const ranges: [number, number][] = [];
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
+    ranges.push([at, at + needle.length]);
+  }
+  return ranges;
+}
+
+/** Splits text into runs, marking the ones that match, for highlighting. */
+export function splitMatches(text: string, query: string): { text: string; match: boolean }[] {
   const runs: { text: string; match: boolean }[] = [];
   let from = 0;
-  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, from)) {
-    if (at > from) runs.push({ text: text.slice(from, at), match: false });
-    runs.push({ text: text.slice(at, at + needle.length), match: true });
-    from = at + needle.length;
+  for (const [start, end] of matchRanges(text, query)) {
+    if (start > from) runs.push({ text: text.slice(from, start), match: false });
+    runs.push({ text: text.slice(start, end), match: true });
+    from = end;
   }
-  if (from < text.length) runs.push({ text: text.slice(from), match: false });
+  if (from < text.length || runs.length === 0) runs.push({ text: text.slice(from), match: false });
   return runs;
 }

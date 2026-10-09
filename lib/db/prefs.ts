@@ -1,20 +1,22 @@
 import { arrayRemove, arrayUnion, doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
+import { DEFAULT_APPEARANCE, toAppearance, type Appearance } from '@/lib/appearance';
 import { DEFAULT_PRIVACY, type AccountDoc, type Privacy } from './schema';
 
 /**
- * Pinned, muted and archived chats. Owner-only, on users/{uid}/private/account
- * -- see AccountDoc for why that doc and not one of its own. Each is a list of
- * chat ids changed with arrayUnion/arrayRemove, so two devices toggling
- * different chats at once cannot overwrite each other.
+ * Pinned, muted, archived and favourite chats. Owner-only, on
+ * users/{uid}/private/account -- see AccountDoc for why that doc and not one
+ * of its own. Each is a list of chat ids changed with arrayUnion/arrayRemove,
+ * so two devices toggling different chats at once cannot overwrite each other.
  */
 export type ChatPrefs = {
   pinned: string[];
   muted: string[];
   archived: string[];
+  favourites: string[];
 };
 
-export const NO_PREFS: ChatPrefs = { pinned: [], muted: [], archived: [] };
+export const NO_PREFS: ChatPrefs = { pinned: [], muted: [], archived: [], favourites: [] };
 
 /** Everything on the account doc the app reads, with defaults filled in. */
 export type AccountSettings = {
@@ -23,6 +25,7 @@ export type AccountSettings = {
   blocked: string[];
   /** Own photo while it is off the public profile; undefined when it is not. */
   photoURL: string | null | undefined;
+  appearance: Appearance;
 };
 
 export const NO_ACCOUNT: AccountSettings = {
@@ -30,6 +33,7 @@ export const NO_ACCOUNT: AccountSettings = {
   privacy: DEFAULT_PRIVACY,
   blocked: [],
   photoURL: undefined,
+  appearance: DEFAULT_APPEARANCE,
 };
 
 const accountRef = (uid: string) => doc(db(), 'users', uid, 'private', 'account');
@@ -57,10 +61,12 @@ export function subscribeAccount(
             pinned: data?.pinned ?? [],
             muted: data?.muted ?? [],
             archived: data?.archived ?? [],
+            favourites: data?.favourites ?? [],
           },
           privacy: { ...DEFAULT_PRIVACY, ...data?.privacy },
           blocked: data?.blocked ?? [],
           photoURL: data?.photoURL,
+          appearance: toAppearance(data?.appearance),
         },
         snapshot.exists() || !snapshot.metadata.fromCache,
       );
@@ -83,4 +89,9 @@ export async function setChatPref(
     pref === 'archived' && on ? { archived: change, pinned: arrayRemove(chatId) } : { [pref]: change },
     { merge: true },
   );
+}
+
+/** Theme or wallpaper. Merged field by field, so one never resets the other. */
+export async function setAppearance(uid: string, patch: Partial<Appearance>): Promise<void> {
+  await setDoc(accountRef(uid), { appearance: patch }, { merge: true });
 }

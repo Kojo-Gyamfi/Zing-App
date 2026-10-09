@@ -118,12 +118,23 @@ rather than letting every decryption fail mysteriously.
 - **Reactions are sealed like message bodies**: `messages/{id}.reactions.{uid}` holds an envelope
   from `envelope.ts`, never a bare emoji. The rules let any member write only their own entry, and
   "delete for everyone" removes reactions with the ciphertext.
-- **Pin, mute and archive live on `users/{uid}/private/account`** next to the push tokens, because the
-  push route already reads that doc: a muted chat is skipped there at no extra read. Mute must never
-  be done in the service worker — browsers revoke push from a worker that shows nothing.
+- **Pin, mute, archive and favourites live on `users/{uid}/private/account`** next to the push
+  tokens, because the push route already reads that doc: a muted chat is skipped there at no extra
+  read. Mute must never be done in the service worker — browsers revoke push from a worker that shows
+  nothing. Favourites only feed the chat list's All / Unread / Favourites chips, which narrow the
+  inbox and never reach into Archived.
 - **The account doc has one listener for the whole app** (`lib/store/account.ts`), started by the
-  session: prefs, privacy settings, the block list and a hidden own photo all come from it. Screens
-  read the store; they do not listen to the doc themselves.
+  session: prefs, privacy settings, the block list, a hidden own photo and the appearance all come
+  from it. Screens read the store; they do not listen to the doc themselves.
+- **Theme and wallpaper** (`lib/appearance.ts`) are `appearance` on the account doc, so they follow
+  the user to a new phone, and are mirrored to localStorage so an inline script in `app/layout.tsx`
+  (carrying the CSP nonce) sets `data-theme` and `data-wallpaper` on `<html>` before the first
+  paint. `components/AppearanceSync.tsx` takes over once the doc is read. Components use the colour
+  tokens in `app/globals.css` only; the light theme redefines them, so never hard-code a colour.
+- **Message formatting is rendering only** (`lib/formatting.ts`): `*bold*`, `_italic_`, `~strike~`,
+  `` `code` `` and ```` ```blocks``` ```` become styled runs on the device, with links and search hits
+  laid over the same runs. Code stays literal and links are never cut by a marker. Nothing about it is
+  on the wire; one-line previews (chat list, reply bar, quotes) use `plainText`.
 - **Privacy settings work by not publishing**, never by asking other clients to look away: read
   receipts off means `lastRead` is never written (the badge is cleared with `unread.{uid}` alone, and
   the list's unread state follows that counter); last seen off means no RTDB presence node exists.

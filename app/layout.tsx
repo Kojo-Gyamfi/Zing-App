@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from 'next';
-import { connection } from 'next/server';
+import { headers } from 'next/headers';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/Providers';
+import { APPEARANCE_SCRIPT, DEFAULT_APPEARANCE, THEME_COLORS } from '@/lib/appearance';
 
 const sans = Geist({ variable: '--font-sans', subsets: ['latin'] });
 // Safety numbers need fixed-width digits to be comparable at a glance.
@@ -24,7 +25,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0b0f10',
+  // The default theme's background; lib/appearance.ts updates it on a switch.
+  themeColor: THEME_COLORS.dark,
   // Lets the app paint under the notch and home indicator; the shell then
   // pads itself back with env(safe-area-inset-*).
   viewportFit: 'cover',
@@ -44,11 +46,25 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Render per request: the CSP nonce from proxy.ts is only stamped onto
   // scripts at request time, so a prerendered page would have its own
-  // scripts blocked.
-  await connection();
+  // scripts blocked. Reading the headers is what opts in, and the inline
+  // theme script below needs the nonce itself.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
 
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable} h-full`}>
+    // The theme script changes data-theme and data-wallpaper before React
+    // hydrates; suppressHydrationWarning lets the DOM keep them.
+    <html
+      lang="en"
+      data-theme="dark"
+      data-wallpaper={DEFAULT_APPEARANCE.wallpaper}
+      className={`${sans.variable} ${mono.variable} h-full`}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Runs while the HTML is parsed, so a light-theme user never sees a
+            dark first frame. See lib/appearance.ts. */}
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: APPEARANCE_SCRIPT }} />
+      </head>
       {/* Browser extensions (Grammarly and the like) add attributes to <body>
           before React loads. This ignores attribute differences on this one
           element only -- mismatches anywhere below still surface. */}

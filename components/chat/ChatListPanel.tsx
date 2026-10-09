@@ -10,6 +10,7 @@ import { useTypingChats } from '@/lib/hooks/useTypingChats';
 import { setChatPref, type ChatPrefs } from '@/lib/db/prefs';
 import { listTime } from '@/lib/format';
 import { setAppBadge } from '@/lib/badge';
+import { plainText } from '@/lib/formatting';
 import { useMyPhoto } from '@/lib/store/account';
 import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
@@ -20,6 +21,14 @@ import { ChatRowMenu } from './ChatRowMenu';
 const LONG_PRESS_MS = 450;
 const NO_DRAFTS: Record<string, string> = {};
 
+/** The chips above the list. Each narrows the inbox; none reaches into Archived. */
+type ListFilter = 'all' | 'unread' | 'favourites';
+const FILTERS: { value: ListFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'unread', label: 'Unread' },
+  { value: 'favourites', label: 'Favourites' },
+];
+
 export function ChatListPanel() {
   const { rows, loading, hasMore, loadMore } = useChatList();
   const profile = useSession((state) => state.profile);
@@ -27,6 +36,7 @@ export function ChatListPanel() {
   const pathname = usePathname();
   const [filter, setFilter] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [listFilter, setListFilter] = useState<ListFilter>('all');
   const [menuFor, setMenuFor] = useState<ChatListRow | null>(null);
   const myUid = useSession((state) => state.user?.uid);
   const prefs = useChatPrefs(myUid);
@@ -40,6 +50,7 @@ export function ChatListPanel() {
       pinned: new Set(prefs.pinned),
       muted: new Set(prefs.muted),
       archived: new Set(prefs.archived),
+      favourites: new Set(prefs.favourites),
     }),
     [prefs],
   );
@@ -59,12 +70,19 @@ export function ChatListPanel() {
     }
     if (showArchived) return archivedRows;
     // Pinned on top, each group newest first (rows already arrive that way).
-    const inbox = rows.filter((row) => !flags.archived.has(row.id));
+    const inbox = rows.filter((row) => {
+      if (flags.archived.has(row.id)) return false;
+      if (listFilter === 'favourites') return flags.favourites.has(row.id);
+      // The open chat stays under Unread after reading it clears the badge,
+      // as on WhatsApp -- otherwise it would vanish from beside the thread.
+      if (listFilter === 'unread') return row.unread || pathname === `/chats/${row.id}`;
+      return true;
+    });
     return [
       ...inbox.filter((row) => flags.pinned.has(row.id)),
       ...inbox.filter((row) => !flags.pinned.has(row.id)),
     ];
-  }, [rows, filter, showArchived, archivedRows, flags]);
+  }, [rows, filter, showArchived, archivedRows, flags, listFilter, pathname]);
 
   const archivedUnread = archivedRows.filter((row) => row.unread).length;
 
@@ -149,6 +167,27 @@ export function ChatListPanel() {
         />
       </div>
 
+      {!searching && !showArchived && (
+        <div role="radiogroup" aria-label="Show" className="flex gap-2 px-4 pb-3">
+          {FILTERS.map((choice) => (
+            <button
+              key={choice.value}
+              role="radio"
+              aria-checked={listFilter === choice.value}
+              onClick={() => setListFilter(choice.value)}
+              className={`h-8 rounded-full px-3.5 text-[13px] font-medium transition-colors
+                ${
+                  listFilter === choice.value
+                    ? 'bg-zing text-on-zing'
+                    : 'bg-surface text-muted hover:bg-elevated hover:text-ink'
+                }`}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <NotificationPrompt />
 
       <div
@@ -162,7 +201,7 @@ export function ChatListPanel() {
           }
         }}
       >
-        {!loading && !showArchived && !searching && archivedRows.length > 0 && (
+        {!loading && !showArchived && !searching && listFilter === 'all' && archivedRows.length > 0 && (
           <button
             onClick={() => setShowArchived(true)}
             className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface"
@@ -185,7 +224,7 @@ export function ChatListPanel() {
             <span className="text-sm">Decrypting your chats</span>
           </div>
         ) : visible.length === 0 ? (
-          <EmptyState searching={searching} archive={showArchived} />
+          <EmptyState searching={searching} archive={showArchived} filter={listFilter} />
         ) : (
           <ul>
             {visible.map((row) => (
@@ -225,10 +264,12 @@ export function ChatListPanel() {
           pinned={flags.pinned.has(menuFor.id)}
           muted={flags.muted.has(menuFor.id)}
           archived={flags.archived.has(menuFor.id)}
+          favourite={flags.favourites.has(menuFor.id)}
           pinnedCount={rows.filter((row) => flags.pinned.has(row.id) && !flags.archived.has(row.id)).length}
           onPin={(on) => toggle('pinned', menuFor.id, on)}
           onMute={(on) => toggle('muted', menuFor.id, on)}
           onArchive={(on) => toggle('archived', menuFor.id, on)}
+          onFavourite={(on) => toggle('favourites', menuFor.id, on)}
           onClose={() => setMenuFor(null)}
         />
       )}
@@ -329,7 +370,7 @@ function ChatRow({
               ) : row.preview === null ? (
                 row.lastSenderId ? 'Encrypted message' : 'Say hello'
               ) : (
-                row.preview
+                plainText(row.preview)
               )}
             </span>
 
@@ -386,13 +427,35 @@ function ChatRow({
   );
 }
 
-function EmptyState({ searching, archive }: { searching: boolean; archive: boolean }) {
+function EmptyState({
+  searching,
+  archive,
+  filter,
+}: {
+  searching: boolean;
+  archive: boolean;
+  filter: ListFilter;
+}) {
+  const filtered = !searching && !archive && filter !== 'all';
   return (
     <div className="flex flex-col items-center gap-2 px-8 py-16 text-center">
       <p className="text-[15px] text-muted">
-        {searching ? 'No chats match that.' : archive ? 'No archived chats.' : 'No conversations yet.'}
+        {searching
+          ? 'No chats match that.'
+          : archive
+            ? 'No archived chats.'
+            : filter === 'unread'
+              ? 'No unread chats.'
+              : filter === 'favourites'
+                ? 'No favourites yet.'
+                : 'No conversations yet.'}
       </p>
-      {!searching && !archive && (
+      {filter === 'favourites' && filtered && (
+        <p className="text-[13px] leading-relaxed text-faint">
+          Long-press a chat, or right-click it, and choose Add to favourites.
+        </p>
+      )}
+      {!searching && !archive && !filtered && (
         <p className="text-[13px] leading-relaxed text-faint">
           Tap the pencil to find someone by their @username.
         </p>

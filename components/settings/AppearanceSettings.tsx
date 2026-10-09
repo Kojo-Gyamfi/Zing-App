@@ -1,0 +1,107 @@
+'use client';
+
+import { useState } from 'react';
+import { useAccount } from '@/lib/store/account';
+import { setAppearance } from '@/lib/db/prefs';
+import { WALLPAPERS, type ThemeChoice, type Wallpaper } from '@/lib/appearance';
+
+const THEMES: { value: ThemeChoice; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
+const WALLPAPER_NAMES: Record<Wallpaper, string> = {
+  doodles: 'Doodles',
+  plain: 'Plain',
+  ocean: 'Ocean',
+  forest: 'Forest',
+  dusk: 'Dusk',
+  sand: 'Sand',
+};
+
+/**
+ * Theme and chat wallpaper. Saved on the account doc, so they follow this
+ * account to a new phone; AppearanceSync puts them on the page.
+ */
+export function AppearanceSettings({ uid }: { uid: string }) {
+  const known = useAccount((state) => state.known);
+  const { theme, wallpaper } = useAccount((state) => state.settings.appearance);
+  const [error, setError] = useState<string | null>(null);
+
+  // Not awaited: the account listener shows the change from the local cache
+  // at once, and offline the commit would wait for a reconnect.
+  function save(patch: { theme?: ThemeChoice; wallpaper?: Wallpaper }) {
+    setError(null);
+    setAppearance(uid, patch).catch(() =>
+      setError('Could not save. Check your connection and try again.'),
+    );
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Appearance</h2>
+
+      <div className="divide-y divide-line rounded-2xl border border-line bg-surface">
+        <div className="space-y-2.5 p-4">
+          <div>
+            <p className="text-[14px] font-medium text-ink">Theme</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-faint">
+              System follows your phone’s dark mode.
+            </p>
+          </div>
+          <div role="radiogroup" aria-label="Theme" className="flex gap-1.5">
+            {THEMES.map((choice) => (
+              <button
+                key={choice.value}
+                role="radio"
+                aria-checked={theme === choice.value}
+                disabled={!known}
+                onClick={() => theme !== choice.value && save({ theme: choice.value })}
+                className={`h-9 flex-1 rounded-xl text-[13px] font-medium transition-colors disabled:opacity-50
+                  ${theme === choice.value ? 'bg-zing text-on-zing' : 'bg-elevated text-muted hover:text-ink'}`}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-2.5 p-4">
+          <p className="text-[14px] font-medium text-ink">Chat wallpaper</p>
+          <div role="radiogroup" aria-label="Chat wallpaper" className="grid grid-cols-3 gap-2">
+            {WALLPAPERS.map((choice) => (
+              <button
+                key={choice}
+                role="radio"
+                aria-checked={wallpaper === choice}
+                disabled={!known}
+                onClick={() => wallpaper !== choice && save({ wallpaper: choice })}
+                className={`overflow-hidden rounded-xl border-2 text-left transition-colors disabled:opacity-50
+                  ${wallpaper === choice ? 'border-zing' : 'border-line hover:border-muted'}`}
+              >
+                {/* A miniature thread on that wallpaper: one bubble each way. */}
+                <span
+                  data-wallpaper={choice}
+                  className="chat-wallpaper flex h-16 flex-col justify-center gap-1 px-2"
+                  aria-hidden="true"
+                >
+                  <span className="h-2.5 w-3/5 rounded-full bg-bubble-in" />
+                  <span className="h-2.5 w-1/2 self-end rounded-full bg-bubble-out" />
+                </span>
+                <span
+                  className={`block px-2 py-1.5 text-[12px] font-medium
+                    ${wallpaper === choice ? 'text-zing' : 'text-muted'}`}
+                >
+                  {WALLPAPER_NAMES[choice]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {error && <p className="text-[12px] text-danger">{error}</p>}
+    </section>
+  );
+}

@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { motion, useMotionValue, useTransform } from 'motion/react';
 import { bubbleTime } from '@/lib/format';
 import { DELETED_LABEL } from '@/lib/db/messages';
-import { splitMatches } from '@/lib/search';
-import { firstLinkCard, splitLinks, type LinkCard } from '@/lib/links';
+import { linkCard, type LinkCard } from '@/lib/links';
+import { formatText, plainText, type FormattedRun } from '@/lib/formatting';
 import type { ReactionChip } from '@/lib/reactions';
 import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
@@ -41,6 +41,47 @@ const CARD_ICONS: Record<LinkCard['kind'], string> = {
 };
 
 /**
+ * One run of formatted text (lib/formatting.ts), innermost first: the search
+ * highlight, then code, emphasis, and the link around the lot.
+ */
+function Run({ run }: { run: FormattedRun }) {
+  let node: React.ReactNode = run.text;
+  if (run.match) node = <mark className="rounded-sm bg-zing/40 text-ink">{node}</mark>;
+  if (run.code) {
+    node = (
+      <code className="rounded bg-inset px-1 py-px font-mono text-[0.9em] break-all whitespace-pre-wrap">
+        {node}
+      </code>
+    );
+  }
+  if (run.strike) node = <s>{node}</s>;
+  if (run.italic) node = <em>{node}</em>;
+  if (run.bold) node = <strong className="font-semibold">{node}</strong>;
+  if (run.href) {
+    node = (
+      <a
+        href={run.href}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        referrerPolicy="no-referrer"
+        // A tap on a link is not the start of a long-press.
+        onPointerDown={(event) => event.stopPropagation()}
+        className="break-all text-zing-soft underline underline-offset-2"
+      >
+        {node}
+      </a>
+    );
+  }
+  return node;
+}
+
+/** A message body with its formatting, links and search hits. */
+export function FormattedText({ text, search = '' }: { text: string; search?: string }) {
+  const runs = useMemo(() => formatText(text, search), [text, search]);
+  return runs.map((run, index) => <Run key={index} run={run} />);
+}
+
+/**
  * The card under a message's first link, made from the URL alone -- no
  * request to the site, from either phone (see lib/links.ts). The host is the
  * real one, so a link whose text pretends to be somewhere else is caught out.
@@ -53,9 +94,9 @@ function LinkPreview({ card }: { card: LinkCard }) {
       rel="noopener noreferrer nofollow"
       referrerPolicy="no-referrer"
       onPointerDown={(event) => event.stopPropagation()}
-      className="mt-1.5 flex items-center gap-2.5 rounded-lg bg-black/20 px-2.5 py-2 text-left"
+      className="mt-1.5 flex items-center gap-2.5 rounded-lg bg-inset px-2.5 py-2 text-left"
     >
-      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-black/25 text-muted">
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-inset text-muted">
         <svg viewBox="0 0 24 24" className="size-4" aria-hidden="true">
           <path
             d={CARD_ICONS[card.kind]}
@@ -144,7 +185,13 @@ export function MessageBubble({
   const interactive = !message.failed && !message.deleted;
   const hasMenu = !message.failed;
   const showReactions = reactions.length > 0 && !message.deleted;
-  const card = useMemo(() => (message.text ? firstLinkCard(message.text) : null), [message.text]);
+  const runs = useMemo(
+    () => (message.text ? formatText(message.text, search) : []),
+    [message.text, search],
+  );
+  // The first link outside code, which formatText has already picked out.
+  const firstHref = runs.find((run) => run.href)?.href;
+  const card = useMemo(() => (firstHref ? linkCard(firstHref) : null), [firstHref]);
 
   return (
     <motion.div
@@ -230,7 +277,7 @@ export function MessageBubble({
           <button
             type="button"
             onClick={onQuoteClick}
-            className="mb-1.5 block w-full rounded-lg border-l-[3px] border-zing bg-black/20
+            className="mb-1.5 block w-full rounded-lg border-l-[3px] border-zing bg-inset
               px-2.5 py-1.5 text-left"
           >
             {quote.author && (
@@ -240,7 +287,7 @@ export function MessageBubble({
               {quote.deleted ? (
                 <em>{DELETED_LABEL}</em>
               ) : (
-                (quote.text ?? <em>Original message not loaded</em>)
+                (quote.text !== null ? plainText(quote.text) : <em>Original message not loaded</em>)
               )}
             </span>
           </button>
@@ -269,34 +316,9 @@ export function MessageBubble({
         ) : (
           <>
             <span className="break-words whitespace-pre-wrap">
-              {search
-                ? splitMatches(message.text, search).map((run, index) =>
-                    run.match ? (
-                      <mark key={index} className="rounded-sm bg-zing/40 text-ink">
-                        {run.text}
-                      </mark>
-                    ) : (
-                      run.text
-                    ),
-                  )
-                : splitLinks(message.text).map((run, index) =>
-                    run.href ? (
-                      <a
-                        key={index}
-                        href={run.href}
-                        target="_blank"
-                        rel="noopener noreferrer nofollow"
-                        referrerPolicy="no-referrer"
-                        // A tap on a link is not the start of a long-press.
-                        onPointerDown={(event) => event.stopPropagation()}
-                        className="break-all text-zing-soft underline underline-offset-2"
-                      >
-                        {run.text}
-                      </a>
-                    ) : (
-                      run.text
-                    ),
-                  )}
+              {runs.map((run, index) => (
+                <Run key={index} run={run} />
+              ))}
             </span>
             {card && <LinkPreview card={card} />}
           </>

@@ -336,3 +336,71 @@ test('signs up with an emailed code, on any provider, and can delete the account
   await carol.getByRole('button', { name: 'Delete forever' }).click();
   await expect(carol).toHaveURL(/\/login/, { timeout: 30_000 });
 });
+
+test('formatting, chat filters and light mode', async ({ browser }) => {
+  const erin = await newPhone(browser);
+  const frank = await newPhone(browser);
+  const erinHandle = `erin_${run}`;
+  const frankHandle = `frank_${run}`;
+
+  await signInWithGoogle(erin, erinHandle);
+  await onboard(erin, erinHandle);
+  await signInWithGoogle(frank, frankHandle);
+  await onboard(frank, frankHandle);
+
+  await erin.getByRole('link', { name: 'New chat' }).click();
+  await erin.getByLabel('Find someone').fill(`@${frankHandle}`);
+  await erin.getByRole('button', { name: 'Find' }).click();
+  await erin.getByRole('button', { name: 'Chat' }).click();
+  await send(erin, '*bold* and _soft_ with `*code*` at https://example.com/a_b_c');
+  await expect(frank.getByLabel('1 unread')).toBeVisible();
+
+  // Filters: unread shows the new chat; favourites is empty until it is added.
+  const row = frank.locator('li').filter({ hasText: erinHandle });
+  await frank.getByRole('radio', { name: 'Unread' }).click();
+  await expect(row).toBeVisible();
+  await frank.getByRole('radio', { name: 'Favourites' }).click();
+  await expect(frank.getByText('No favourites yet.')).toBeVisible();
+  await frank.getByRole('radio', { name: 'All' }).click();
+  await row.getByRole('link').dispatchEvent('contextmenu');
+  await frank.getByRole('button', { name: /Add to favourites/ }).click();
+  await frank.getByRole('radio', { name: 'Favourites' }).click();
+  await expect(row).toBeVisible();
+  // The list preview reads without the markers.
+  await expect(row.getByText('bold and soft with *code* at', { exact: false })).toBeVisible();
+
+  // Formatting renders on the receiving phone; the link keeps its underscores
+  // and code stays literal.
+  await row.getByRole('link').click();
+  const thread = frank.getByRole('main');
+  await expect(thread.locator('strong', { hasText: 'bold' })).toBeVisible();
+  await expect(thread.locator('em', { hasText: 'soft' })).toBeVisible();
+  await expect(thread.locator('code', { hasText: '*code*' })).toBeVisible();
+  await expect(thread.getByRole('link', { name: 'https://example.com/a_b_c' })).toHaveAttribute(
+    'href',
+    'https://example.com/a_b_c',
+  );
+
+  // Read now, so it leaves the Unread filter once the thread is closed.
+  await frank.goto('/chats');
+  await frank.getByRole('radio', { name: 'Unread' }).click();
+  await expect(frank.getByText('No unread chats.')).toBeVisible();
+
+  // Light mode and a wallpaper: saved to the account, applied at once, and
+  // back before the first paint after a reload.
+  await frank.goto('/settings');
+  await frank.getByRole('radio', { name: 'Light' }).click();
+  await frank.getByRole('radio', { name: 'Ocean' }).click();
+  const html = frank.locator('html');
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  await expect(html).toHaveAttribute('data-wallpaper', 'ocean');
+  await frank.reload();
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  await frank.goto('/chats');
+  await expect(row).toBeVisible();
+  await row.getByRole('link').click();
+  await expect(thread.locator('strong', { hasText: 'bold' })).toBeVisible();
+
+  // It follows the account: Erin's phone is untouched, still dark.
+  await expect(erin.locator('html')).toHaveAttribute('data-theme', 'dark');
+});

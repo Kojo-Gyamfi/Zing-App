@@ -3,8 +3,8 @@
 import { MAX_PINNED } from '@/lib/db/schema';
 
 /**
- * Long-press / right-click actions for one chat in the list: pin, mute,
- * archive. All three are the owner's own preferences -- the other person
+ * Long-press / right-click actions for one chat in the list: pin, favourite,
+ * mute, archive. All are the owner's own preferences -- the other person
  * never finds out.
  */
 export function ChatRowMenu({
@@ -12,20 +12,24 @@ export function ChatRowMenu({
   pinned,
   muted,
   archived,
+  favourite,
   pinnedCount,
   onPin,
   onMute,
   onArchive,
+  onFavourite,
   onClose,
 }: {
   name: string;
   pinned: boolean;
   muted: boolean;
   archived: boolean;
+  favourite: boolean;
   pinnedCount: number;
   onPin: (on: boolean) => void;
   onMute: (on: boolean) => void;
   onArchive: (on: boolean) => void;
+  onFavourite: (on: boolean) => void;
   onClose: () => void;
 }) {
   const pinFull = !pinned && pinnedCount >= MAX_PINNED;
@@ -56,6 +60,15 @@ export function ChatRowMenu({
               }}
             />
           )}
+          <Item
+            label={favourite ? 'Remove from favourites' : 'Add to favourites'}
+            hint={favourite ? undefined : 'Shows it under the Favourites filter.'}
+            icon="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"
+            onClick={() => {
+              onFavourite(!favourite);
+              onClose();
+            }}
+          />
           <Item
             label={muted ? 'Unmute notifications' : 'Mute notifications'}
             hint={muted ? undefined : 'No push notifications from this chat. Messages still arrive.'}

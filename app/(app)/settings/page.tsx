@@ -25,6 +25,7 @@ import { Field } from '@/components/ui/Field';
 import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 import { ShareProfileCard } from '@/components/settings/ShareProfileCard';
 import { PrivacySettings } from '@/components/settings/PrivacySettings';
+import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
 
 const MIN_PASSPHRASE = 10;
 
@@ -301,6 +302,8 @@ export default function SettingsPage() {
         </section>
 
         <ShareProfileCard profile={profile} />
+
+        <AppearanceSettings uid={profile.uid} />
 
         <PrivacySettings uid={profile.uid} photoURL={myPhoto} />
 

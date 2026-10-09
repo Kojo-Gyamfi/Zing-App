@@ -1,5 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { KeyBackup } from '@/lib/crypto/types';
+import type { Appearance } from '@/lib/appearance';
 
 /**
  * Firestore document shapes.
@@ -43,6 +44,10 @@ export type AccountDoc = {
   muted?: string[];
   /** Chat ids moved out of the main list into "Archived". */
   archived?: string[];
+  /** Chat ids under the "Favourites" filter of the chat list. */
+  favourites?: string[];
+  /** Theme and wallpaper, so they follow the user to a new phone. */
+  appearance?: Partial<Appearance>;
   /** What this user shows other people. A missing field means the default. */
   privacy?: Partial<Privacy>;
   /**

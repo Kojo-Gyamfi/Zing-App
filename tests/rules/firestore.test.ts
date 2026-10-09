@@ -458,7 +458,13 @@ describe('starred lists', () => {
 
 describe('chat preferences', () => {
   it('live on the owner-only account doc', async () => {
-    const prefs = { pinned: [CHAT], muted: [CHAT], archived: [] };
+    const prefs = {
+      pinned: [CHAT],
+      muted: [CHAT],
+      archived: [],
+      favourites: [CHAT],
+      appearance: { theme: 'light', wallpaper: 'ocean' },
+    };
     await assertSucceeds(setDoc(doc(as('alice'), 'users/alice/private/account'), prefs, { merge: true }));
     await assertFails(getDoc(doc(as('bob'), 'users/alice/private/account')));
     await assertFails(setDoc(doc(as('bob'), 'users/alice/private/account'), prefs, { merge: true }));
