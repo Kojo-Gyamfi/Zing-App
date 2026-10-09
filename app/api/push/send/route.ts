@@ -46,13 +46,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
-  let body: { chatId?: unknown; ciphertext?: unknown; nonce?: unknown };
+  let body: { chatId?: unknown; ciphertext?: unknown; nonce?: unknown; viewOnce?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'bad request' }, { status: 400 });
   }
+  // Valid JSON is not necessarily an object: `null` would throw below.
+  if (!body || typeof body !== 'object') {
+    return NextResponse.json({ error: 'bad request' }, { status: 400 });
+  }
   const { chatId, ciphertext, nonce } = body;
+  // A view-once message never goes out in a push: its text would sit in the
+  // notification after it had been opened and wiped (lib/viewOnce.ts).
+  const viewOnce = body.viewOnce === true;
 
   if (typeof chatId !== 'string' || typeof ciphertext !== 'string' || typeof nonce !== 'string') {
     return NextResponse.json({ error: 'bad request' }, { status: 400 });
@@ -91,17 +98,21 @@ export async function POST(request: Request) {
 
   const senderName = (sender.data()?.displayName as string) ?? 'Someone';
 
+  // Each recipient's own account doc, which the owner writes: anything in
+  // it may be malformed, and one bad field must not 500 every sender's push.
+  const list = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
   const targets = recipients.flatMap((doc) => {
     // Muted: no push at all. Leaving it to the service worker to stay quiet
     // is not an option -- browsers expect every push to show something, and
     // revoke the subscription of a worker that keeps showing nothing.
     // "Always" is the muted list; 8 hours / 1 week is mutedUntil (lib/mute.ts).
-    if (((doc.data()?.muted ?? []) as string[]).includes(chatId)) return [];
+    if (list(doc.data()?.muted).includes(chatId)) return [];
     const until = doc.data()?.mutedUntil?.[chatId] as Timestamp | undefined;
-    if (until && until.toMillis() > Date.now()) return [];
-    const tokens = (doc.data()?.pushTokens ?? []) as string[];
+    if (typeof until?.toMillis === 'function' && until.toMillis() > Date.now()) return [];
     // doc is users/{uid}/private/account, so the uid is two levels up.
-    return tokens.map((token) => ({ uid: doc.ref.parent.parent!.id, token }));
+    return list(doc.data()?.pushTokens).map((token) => ({ uid: doc.ref.parent.parent!.id, token }));
   });
 
   if (targets.length === 0) {
@@ -110,10 +121,17 @@ export async function POST(request: Request) {
 
   // FCM rejects data payloads over 4 KB. A long message goes out without its
   // ciphertext, and the service worker shows "New message" instead of a preview.
-  const fits = chatId.length + senderName.length + ciphertext.length + nonce.length < 3500;
-  const data: Record<string, string> = fits
-    ? { chatId, senderName, ciphertext, nonce }
-    : { chatId, senderName };
+  //
+  // The sender goes by their public name and uid. A recipient's nickname for
+  // them is private, so it never travels through FCM: the service worker puts
+  // it in from the copy the app keeps on that device (lib/crypto/vault.ts).
+  const base = { chatId, senderName, senderUid };
+  const fits = chatId.length + senderName.length + ciphertext.length + nonce.length < 3400;
+  const data: Record<string, string> = viewOnce
+    ? { ...base, viewOnce: '1' }
+    : fits
+      ? { ...base, ciphertext, nonce }
+      : base;
 
   const response = await adminMessaging().sendEachForMulticast({
     tokens: targets.map((target) => target.token),
@@ -136,11 +154,14 @@ export async function POST(request: Request) {
     }
   });
 
+  // Best effort: a doc deleted meanwhile (the account went) must not turn a
+  // delivered push into an error.
   await Promise.all(
     [...stale].map(([uid, tokens]) =>
       adminDb()
         .doc(`users/${uid}/private/account`)
-        .update({ pushTokens: FieldValue.arrayRemove(...tokens) }),
+        .update({ pushTokens: FieldValue.arrayRemove(...tokens) })
+        .catch(() => undefined),
     ),
   );
 

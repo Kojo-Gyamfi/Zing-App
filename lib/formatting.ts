@@ -74,21 +74,47 @@ function findAtoms(text: string): Atom[] {
   return atoms.sort((a, b) => a.start - b.start);
 }
 
+// Which atom covers each position, built once per message: atomAt is asked
+// for every character, and a scan of every link and code span each time made
+// a message full of them slow to draw. Atoms never overlap (code is found in
+// one pass, and links that would cut into code are dropped), so one slot each.
+const covers = new WeakMap<Atom[], Int32Array>();
+
 function atomAt(atoms: Atom[], index: number): Atom | undefined {
-  return atoms.find((atom) => index >= atom.start && index < atom.end);
+  if (atoms.length === 0) return undefined;
+  let cover = covers.get(atoms);
+  if (!cover) {
+    cover = new Int32Array(Math.max(...atoms.map((atom) => atom.end))).fill(-1);
+    atoms.forEach((atom, slot) => cover!.fill(slot, atom.start, atom.end));
+    covers.set(atoms, cover);
+  }
+  const slot = index < cover.length ? cover[index] : -1;
+  return slot === -1 ? undefined : atoms[slot];
 }
 
 /**
  * An opening marker sits at the start of a word ("*hi" but not "2*3"), and its
  * closing partner at the end of one ("hi*" but not "snake_case"), on the same
  * line. Neither may be inside a link or code.
+ *
+ * `dead` remembers, per marker, where a search that found nothing stopped.
+ * A later opener of that marker before that point searches part of the same
+ * stretch, so it would find nothing either. Without this, thousands of
+ * unclosed "*x " each rescan to the end of the line.
  */
-function closerFor(text: string, open: number, to: number, atoms: Atom[]): number {
+function closerFor(
+  text: string,
+  open: number,
+  to: number,
+  atoms: Atom[],
+  dead: Record<string, number>,
+): number {
   const marker = text[open];
   const before = text[open - 1];
   const after = text[open + 1];
   if (before !== undefined && (WORDLIKE.test(before) || before === marker)) return -1;
   if (after === undefined || /\s/.test(after) || after === marker) return -1;
+  if (open < (dead[marker] ?? -1)) return -1;
 
   for (let at = open + 2; at < to; at++) {
     const atom = atomAt(atoms, at);
@@ -96,7 +122,10 @@ function closerFor(text: string, open: number, to: number, atoms: Atom[]): numbe
       at = atom.end - 1;
       continue;
     }
-    if (text[at] === '\n') return -1;
+    if (text[at] === '\n') {
+      dead[marker] = at;
+      return -1;
+    }
     if (text[at] !== marker) continue;
     const inside = text[at - 1];
     const next = text[at + 1];
@@ -104,6 +133,7 @@ function closerFor(text: string, open: number, to: number, atoms: Atom[]): numbe
     if (next !== undefined && (WORDLIKE.test(next) || next === marker)) continue;
     return at;
   }
+  dead[marker] = to;
   return -1;
 }
 
@@ -116,6 +146,7 @@ function parse(
   runs: FormattedRun[],
 ) {
   let plainFrom = from;
+  const dead: Record<string, number> = {};
   const flush = (until: number) => {
     emit(text, plainFrom, until, styles, atoms, runs);
   };
@@ -128,7 +159,7 @@ function parse(
     }
     const style = MARKERS[text[at]];
     if (!style || styles[style]) continue;
-    const close = closerFor(text, at, to, atoms);
+    const close = closerFor(text, at, to, atoms, dead);
     if (close === -1) continue;
 
     flush(at);
@@ -166,24 +197,31 @@ function emit(
 function highlight(runs: FormattedRun[], ranges: [number, number][]): FormattedRun[] {
   if (!ranges.length) return runs;
   const out: FormattedRun[] = [];
+  // Runs and hits both go left to right and hits never overlap, so one pass
+  // over each does it -- a message full of hits stays linear.
+  let next = 0;
   for (const run of runs) {
     const end = run.start + run.text.length;
-    const cuts = new Set([run.start, end]);
-    for (const [start, stop] of ranges) {
-      if (start > run.start && start < end) cuts.add(start);
-      if (stop > run.start && stop < end) cuts.add(stop);
+    let at = run.start;
+    const piece = (from: number, to: number, match: boolean) => {
+      if (to > from) {
+        out.push({
+          ...run,
+          start: from,
+          text: run.text.slice(from - run.start, to - run.start),
+          ...(match ? { match: true } : {}),
+        });
+      }
+    };
+    while (next < ranges.length && ranges[next][1] <= run.start) next++;
+    for (let index = next; index < ranges.length && ranges[index][0] < end; index++) {
+      const from = Math.max(ranges[index][0], run.start);
+      const to = Math.min(ranges[index][1], end);
+      piece(at, from, false);
+      piece(from, to, true);
+      at = to;
     }
-    const points = [...cuts].sort((a, b) => a - b);
-    for (let index = 0; index < points.length - 1; index++) {
-      const [start, stop] = [points[index], points[index + 1]];
-      const match = ranges.some(([from, to]) => start >= from && stop <= to);
-      out.push({
-        ...run,
-        start,
-        text: run.text.slice(start - run.start, stop - run.start),
-        ...(match ? { match: true } : {}),
-      });
-    }
+    piece(at, end, false);
   }
   return out;
 }

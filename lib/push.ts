@@ -40,12 +40,17 @@ export async function refreshPush(uid: string): Promise<void> {
  */
 export async function disablePush(uid: string): Promise<void> {
   const registered = readRegistered();
-  clearRegistered();
-
   const token = registered?.startsWith(`${uid}:`) ? registered.slice(uid.length + 1) : null;
-  if (!token) return;
+  if (!token) {
+    clearRegistered();
+    return;
+  }
 
-  await Promise.allSettled([unregisterPushToken(uid, token), revokeToken()]);
+  const results = await Promise.allSettled([unregisterPushToken(uid, token), revokeToken()]);
+  // Kept when either failed (offline, say): the next account to turn push on
+  // here sees it belongs to someone else and gets a fresh token, rather than
+  // sharing one that still delivers the previous account's messages.
+  if (results.every((result) => result.status === 'fulfilled')) clearRegistered();
 }
 
 /**
@@ -106,14 +111,26 @@ export async function enablePush(uid: string): Promise<PushOutcome> {
   const registration = await registerServiceWorker();
   if (!registration) return 'unsupported';
 
-  const permission = await Notification.requestPermission();
+  // Throws instead of prompting in an iOS Safari tab; a throw here would leave
+  // the "Turn on" button spinning, so it counts as unsupported.
+  const permission = await Notification.requestPermission().catch(() => null);
+  if (permission === null) return 'unsupported';
   if (permission !== 'granted') return 'denied';
 
   try {
-    const token = await getToken(getMessaging(getApp()), {
+    const messaging = getMessaging(getApp());
+    const options = {
       vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
       serviceWorkerRegistration: registration,
-    });
+    };
+    // A token another account registered here, never unregistered (signed out
+    // offline): revoke it first, so this account's token is a new one.
+    const previous = readRegistered();
+    if (previous && !previous.startsWith(`${uid}:`)) {
+      await getToken(messaging, options).then(() => deleteToken(messaging)).catch(() => undefined);
+      clearRegistered();
+    }
+    const token = await getToken(messaging, options);
 
     // Installed apps call this on every launch; only write when the token or
     // the account on this device has changed.

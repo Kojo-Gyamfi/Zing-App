@@ -47,7 +47,7 @@ export function MessageInfoSheet({
       >
         <p className="text-[15px] font-semibold">Message info</p>
 
-        {message.text !== null && (
+        {message.text !== null && !message.viewOnce && (
           <p className="line-clamp-4 rounded-2xl bg-bubble-out px-3 py-2 text-[14px] break-words whitespace-pre-wrap text-ink">
             {message.text}
           </p>

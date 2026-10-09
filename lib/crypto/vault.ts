@@ -20,10 +20,13 @@ import type { Identity } from './types';
  */
 
 const DB_NAME = 'zing';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'identity';
 const RECORD = 'privateKey';
 const KEYS_STORE = 'chatKeys';
+// Nicknames, for the service worker's notification titles (see saveNicknames).
+const NAMES_STORE = 'names';
+const NICKNAMES = 'nicknames';
 
 let db: Promise<IDBPDatabase> | null = null;
 
@@ -37,6 +40,16 @@ function database() {
         if (!instance.objectStoreNames.contains(KEYS_STORE)) {
           instance.createObjectStore(KEYS_STORE);
         }
+        if (!instance.objectStoreNames.contains(NAMES_STORE)) {
+          instance.createObjectStore(NAMES_STORE);
+        }
+      },
+      // A newer version of the app opened in another tab wants to upgrade:
+      // step aside, or its open waits on this tab forever and it never gets
+      // past the splash. The next call here reopens at the new version.
+      blocking() {
+        void db?.then((instance) => instance.close());
+        db = null;
       },
     }).catch((cause: unknown) => {
       // Not cached: a failed open (storage blocked, a private window) would
@@ -74,7 +87,21 @@ export async function loadIdentity(): Promise<Identity | null> {
  */
 export async function clearIdentity(): Promise<void> {
   const instance = await database();
-  await Promise.all([instance.delete(STORE, RECORD), instance.clear(KEYS_STORE)]);
+  await Promise.all([
+    instance.delete(STORE, RECORD),
+    instance.clear(KEYS_STORE),
+    instance.clear(NAMES_STORE),
+  ]);
+}
+
+/**
+ * My nicknames for people, by uid, for the service worker: a push names the
+ * sender by their public name and uid only, because a nickname is private
+ * and must not pass through FCM. The worker swaps it in from here.
+ */
+export async function saveNicknames(nicknames: Record<string, string>): Promise<void> {
+  const instance = await database();
+  await instance.put(NAMES_STORE, nicknames, NICKNAMES);
 }
 
 /**

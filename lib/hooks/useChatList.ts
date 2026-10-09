@@ -17,12 +17,15 @@ import {
   DELETED_LABEL,
 } from '@/lib/db/messages';
 import { NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
+import { VIEW_ONCE_LABEL } from '@/lib/viewOnce';
 import { isUnread, needsDeliveryReceipt } from '@/lib/receipts';
 import type { UserDoc } from '@/lib/db/schema';
 
 export type ChatListRow = {
   id: string;
   peer: UserDoc | null;
+  /** "Message yourself": a chat whose only member is me, so no peer at all. */
+  self: boolean;
   /** Confirmed gone (not merely unreadable offline): shown as "Deleted account". */
   peerDeleted: boolean;
   /** Null when the preview cannot be decrypted yet; undefined-ish empty chats show a nudge. */
@@ -44,6 +47,7 @@ function fallbackRow(chat: ChatSummary, uid: string): ChatListRow {
   return {
     id: chat.id,
     peer: peerUid ? (useProfiles.getState().profiles[peerUid] ?? null) : null,
+    self: chat.members?.length === 1,
     peerDeleted: false,
     preview: null,
     lastSenderId: null,
@@ -210,6 +214,7 @@ export function useChatList() {
         return {
           id: chat.id,
           peer,
+          self: chat.members.length === 1,
           peerDeleted: peerUid ? Boolean(useProfiles.getState().missing[peerUid]) : false,
           preview: await previewFor(chat, key, hidden.get(chat.id) ?? NOTHING_HIDDEN, updatedAt),
           lastSenderId: chat.lastMessage?.senderId ?? null,
@@ -255,7 +260,13 @@ export function useChatList() {
       if (cached !== undefined) return cached;
 
       const visible = await latestVisibleMessage(chat.id, key, hiddenList).catch(() => null);
-      const text = visible ? (visible.deleted ? DELETED_LABEL : (visible.text ?? '')) : '';
+      const text = visible
+        ? visible.deleted
+          ? DELETED_LABEL
+          : visible.viewOnce
+            ? VIEW_ONCE_LABEL
+            : (visible.text ?? '')
+        : '';
       fallbackPreviews.current.set(cacheKey, text);
       return text;
     }

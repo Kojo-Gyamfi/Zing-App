@@ -487,3 +487,161 @@ test('the chat menu: mute, theme, disappearing, clear and close', async ({ brows
   await expect(row.getByRole('img', { name: 'Muted' })).toBeVisible();
   await expect(row.getByText('after the clear')).toBeVisible();
 });
+
+test('message yourself, nicknames, pinned messages and view once', async ({ browser }) => {
+  const ivy = await newPhone(browser);
+  const jack = await newPhone(browser);
+  const ivyHandle = `ivy_${run}`;
+  const jackHandle = `jack_${run}`;
+
+  await signInWithGoogle(ivy, ivyHandle);
+  await onboard(ivy, ivyHandle);
+  await signInWithGoogle(jack, jackHandle);
+  await onboard(jack, jackHandle);
+
+  // Message yourself: one tap from New chat, a chat whose id is my uid twice.
+  await ivy.getByRole('link', { name: 'New chat' }).click();
+  await ivy.getByRole('button', { name: /Message yourself/ }).click();
+  await expect(ivy).toHaveURL(/\/chats\/([A-Za-z0-9]+)_\1$/);
+  await expect(ivy.getByRole('main').getByText('Message yourself').first()).toBeVisible();
+  await send(ivy, 'note to self');
+  await expect(ivy.getByRole('main').getByText('note to self')).toBeVisible();
+  await ivy.goto('/chats');
+  await expect(ivy.locator('li').filter({ hasText: `${ivyHandle} (You)` })).toContainText('note to self');
+
+  // A normal chat for the rest.
+  await ivy.getByRole('link', { name: 'New chat' }).click();
+  await ivy.getByLabel('Find someone').fill(`@${jackHandle}`);
+  await ivy.getByRole('button', { name: 'Find' }).click();
+  await ivy.getByRole('button', { name: 'Chat', exact: true }).click();
+  await send(ivy, 'pin me');
+  await send(ivy, 'second');
+  await expect(jack.getByLabel('2 unread')).toBeVisible();
+
+  // Nickname: only Jack sees it, everywhere he sees Ivy.
+  await jack.locator('li').getByText(ivyHandle).click();
+  const jackThread = jack.getByRole('main');
+  await jackThread.getByRole('button', { name: new RegExp(ivyHandle) }).first().click();
+  await jack.getByRole('button', { name: 'Add nickname' }).click();
+  await jack.getByLabel(`Nickname for ${ivyHandle}`).fill('Ivy Bear');
+  await jack.getByRole('button', { name: 'Save' }).click();
+  await expect(jack.getByRole('dialog')).toContainText(`~${ivyHandle}`);
+  await jack.mouse.click(20, 20);
+  await expect(jackThread.locator('header')).toContainText('Ivy Bear');
+  await expect(ivy.getByRole('main').locator('header')).toContainText(jackHandle);
+
+  // Pin: Jack pins, both see the bar; tapping it finds the message.
+  await openMenu(jack, 'pin me');
+  await jack.getByRole('button', { name: 'Pin', exact: true }).click();
+  const ivyBar = ivy.getByRole('button', { name: /^Pinned message/ });
+  await expect(ivyBar).toContainText('pin me');
+  await expect(jack.getByRole('button', { name: /^Pinned message/ })).toContainText('pin me');
+  await ivyBar.click();
+  // Unpinning takes it away for both. (The text is in the bar too now.)
+  await ivy.locator('section').getByText('pin me', { exact: true }).dispatchEvent('contextmenu');
+  await ivy.getByRole('button', { name: 'Unpin' }).click();
+  await expect(jack.getByRole('button', { name: /^Pinned message/ })).toHaveCount(0);
+
+  // View once: the text never shows in the bubble, list or menu, and opening
+  // it once wipes it for both.
+  await ivy.getByRole('button', { name: 'View once' }).click();
+  await send(ivy, 'one time secret');
+  await expect(ivy.getByRole('button', { name: 'View once' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(ivy.getByRole('main').getByText('View once message', { exact: true })).toBeVisible();
+  await expect(ivy.getByText('one time secret')).toHaveCount(0);
+  const tapToView = jackThread.getByRole('button', { name: /View once message · Tap to view/ });
+  await expect(tapToView).toBeVisible();
+  await expect(jack.getByText('one time secret')).toHaveCount(0);
+
+  await tapToView.click();
+  const viewer = jack.getByRole('dialog', { name: 'View once message' });
+  await expect(viewer).toContainText('from Ivy Bear');
+  // Not in the page at all until it is pressed, and only while held.
+  await expect(viewer).not.toContainText('one time secret');
+  const hold = viewer.getByRole('button', { name: 'Press and hold to view' });
+  const box = (await hold.boundingBox())!;
+  await jack.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await jack.mouse.down();
+  await expect(viewer).toContainText('one time secret');
+  await expect(viewer).toContainText(`@${jackHandle}`);
+  await jack.mouse.up();
+  await expect(viewer).not.toContainText('one time secret');
+  await viewer.getByRole('button', { name: /^Close/ }).click();
+  await expect(jackThread.getByText('Opened')).toBeVisible();
+  await expect(ivy.getByRole('main').getByText('Opened')).toBeVisible();
+  await jack.reload();
+  await expect(jackThread.getByText('Opened')).toBeVisible();
+  await expect(jack.getByText('one time secret')).toHaveCount(0);
+
+  // The list says what it was, never what it said; and uses the nickname.
+  await jack.goto('/chats');
+  const row = jack.locator('li').filter({ hasText: 'Ivy Bear' });
+  await expect(row).toContainText('View once message');
+});
+
+test('selecting several messages, and changing a username', async ({ browser }) => {
+  const kim = await newPhone(browser);
+  const leo = await newPhone(browser);
+  const kimHandle = `kim_${run}`;
+  const leoHandle = `leo_${run}`;
+
+  await signInWithGoogle(kim, kimHandle);
+  await onboard(kim, kimHandle);
+  await signInWithGoogle(leo, leoHandle);
+  await onboard(leo, leoHandle);
+
+  await kim.getByRole('link', { name: 'New chat' }).click();
+  await kim.getByLabel('Find someone').fill(`@${leoHandle}`);
+  await kim.getByRole('button', { name: 'Find' }).click();
+  await kim.getByRole('button', { name: 'Chat', exact: true }).click();
+  for (const text of ['one', 'two', 'three']) await send(kim, text);
+  await expect(leo.getByLabel('3 unread')).toBeVisible();
+  await leo.locator('li').getByText(kimHandle).click();
+  const leoThread = leo.getByRole('main');
+  await expect(leoThread.getByText('three', { exact: true })).toBeVisible();
+
+  const bubble = (text: string) => kim.locator('section').getByText(text, { exact: true });
+
+  // Select from the menu, then tap more: the header becomes the actions.
+  await openMenu(kim, 'one');
+  await kim.getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(kim.getByText('1 selected')).toBeVisible();
+  await bubble('two').click();
+  await expect(kim.getByText('2 selected')).toBeVisible();
+  await kim.getByRole('button', { name: 'Star', exact: true }).click();
+  await expect(kim.getByRole('main').getByRole('img', { name: 'Starred' })).toHaveCount(2);
+
+  // Forward two at once, into the same chat: both arrive, in order.
+  await openMenu(kim, 'two');
+  await kim.getByRole('button', { name: 'Select', exact: true }).click();
+  await bubble('three').click();
+  await kim.getByRole('button', { name: 'Forward', exact: true }).click();
+  await kim.getByRole('dialog').getByRole('button', { name: new RegExp(leoHandle) }).click();
+  await expect(leoThread.getByText('Forwarded')).toHaveCount(2);
+
+  // Delete several for everyone.
+  await openMenu(kim, 'one');
+  await kim.getByRole('button', { name: 'Select', exact: true }).click();
+  await bubble('three').first().click();
+  await kim.getByRole('button', { name: 'Delete', exact: true }).click();
+  await kim.getByRole('alertdialog').getByRole('button', { name: 'Delete for everyone' }).click();
+  await expect(leoThread.getByText('This message was deleted')).toHaveCount(2);
+  await expect(kim.getByText(/selected$/)).toHaveCount(0);
+
+  // A new @username: the old one stops finding Kim, the new one does.
+  const newHandle = `kim2_${run}`;
+  await kim.goto('/settings');
+  await kim.getByRole('button', { name: 'Change', exact: true }).click();
+  await kim.getByLabel('New username').fill(newHandle);
+  await kim.getByRole('button', { name: 'Save username' }).click();
+  await expect(kim.getByText(`@${newHandle}`).first()).toBeVisible();
+  await expect(kim.getByText('Username changed')).toBeVisible();
+
+  await leo.goto('/chats/new');
+  await leo.getByLabel('Find someone').fill(`@${kimHandle}`);
+  await leo.getByRole('button', { name: 'Find' }).click();
+  await expect(leo.getByText(/Nobody found/)).toBeVisible();
+  await leo.getByLabel('Find someone').fill(`@${newHandle}`);
+  await leo.getByRole('button', { name: 'Find' }).click();
+  await expect(leo.getByText(`@${newHandle}`)).toBeVisible();
+});

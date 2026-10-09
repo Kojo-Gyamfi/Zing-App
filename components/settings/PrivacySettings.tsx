@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAccount } from '@/lib/store/account';
+import { useAccount, useNicknames } from '@/lib/store/account';
+import { nameFor } from '@/lib/names';
 import { useProfiles } from '@/lib/store/profiles';
 import { useSession } from '@/lib/store/session';
 import { setBlocked, setPhotoVisibility, setPrivacy } from '@/lib/db/privacy';
@@ -140,6 +141,7 @@ function BlockedList({
   const load = useProfiles((state) => state.load);
   const profiles = useProfiles((state) => state.profiles);
   const missing = useProfiles((state) => state.missing);
+  const nicknames = useNicknames();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -177,10 +179,10 @@ function BlockedList({
         <ul className="mt-3 space-y-1">
           {blocked.map((peer) => {
             const person = profiles[peer];
-            const name = person?.displayName ?? (missing[peer] ? 'Deleted account' : 'Loading…');
+            const name = nameFor(person, nicknames, missing[peer] ? 'Deleted account' : 'Loading…');
             return (
               <li key={peer} className="flex items-center gap-3 py-1.5">
-                <Avatar name={person?.displayName ?? '?'} photoURL={person?.photoURL} size={36} />
+                <Avatar name={person ? name : '?'} photoURL={person?.photoURL} size={36} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] text-ink">{name}</p>
                   {person && <p className="truncate text-[12px] text-muted">@{person.username}</p>}

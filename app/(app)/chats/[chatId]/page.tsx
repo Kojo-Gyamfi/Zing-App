@@ -26,13 +26,20 @@ import { DisappearingIcon, disappearingLabel } from '@/components/chat/Disappear
 import { ChatMenu } from '@/components/chat/ChatMenu';
 import { useChatPrefs } from '@/lib/hooks/useChatPrefs';
 import { useMuteClock } from '@/lib/hooks/useMuteClock';
-import { useAccount } from '@/lib/store/account';
-import { setChatPref, setChatTheme, setMute } from '@/lib/db/prefs';
+import { useAccount, useMyPhoto, useNicknames } from '@/lib/store/account';
+import { nameFor } from '@/lib/names';
+import { isSelfChat, peerOf } from '@/lib/chatIds';
+import { VIEW_ONCE_LABEL } from '@/lib/viewOnce';
+import { PinnedBar } from '@/components/chat/PinnedBar';
+import { ViewOnceSheet } from '@/components/chat/ViewOnceSheet';
+import { DeleteSelectionSheet, SelectionBar } from '@/components/chat/SelectionBar';
+import { bubbleTime } from '@/lib/format';
+import { setChatPref, setChatTheme, setMute, setNickname } from '@/lib/db/prefs';
 import { muteLabel } from '@/lib/mute';
 
 export default function ThreadPage({ params }: { params: Promise<{ chatId: string }> }) {
   const { chatId } = use(params);
-  const { user } = useSession();
+  const { user, profile } = useSession();
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
   // The ⋮ menu: everything that acts on the chat as a whole.
@@ -46,13 +53,20 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   // device -- the server could not search ciphertext even if asked.
   const [search, setSearch] = useState<string | null>(null);
   const [hit, setHit] = useState(0);
+  // A view-once message of theirs, open: the text as it was when opened.
+  const [viewing, setViewing] = useState<{ id: string; text: string } | null>(null);
+  // Several messages picked at once (WhatsApp's "Select"); null when not.
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [deletingSelection, setDeletingSelection] = useState(false);
+  const [forwardingMany, setForwardingMany] = useState<DecryptedMessage[] | null>(null);
+  // A pinned message older than the loaded pages: load back until it shows.
+  const [pendingJump, setPendingJump] = useState<{ id: string } | null>(null);
 
   // Direct chat ids are the two uids sorted and joined, so the peer is
-  // derivable without a lookup.
-  const peerUid = useMemo(
-    () => chatId.split('_').find((uid) => uid !== user?.uid) ?? null,
-    [chatId, user],
-  );
+  // derivable without a lookup. "Message yourself" has none.
+  const peerUid = useMemo(() => peerOf(chatId, user?.uid), [chatId, user]);
+  const selfChat = isSelfChat(chatId, user?.uid);
+  const myPhoto = useMyPhoto(profile?.photoURL);
 
   const {
     messages,
@@ -63,6 +77,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     blockedByPeer,
     setBlock,
     disappearing,
+    chatKnown,
     setDisappearing,
     presence,
     peerTyping,
@@ -73,6 +88,10 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     deleteForEveryone,
     deleteForMe,
     clearChat,
+    openViewOnce,
+    pinned,
+    pinnedIds,
+    togglePin,
     react,
     starredIds,
     toggleStar,
@@ -92,6 +111,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const muteNow = useMuteClock(prefs);
   const chatTheme = useAccount((state) => state.settings.chatThemes[chatId]) ?? NO_THEME;
   const defaultWallpaper = useAccount((state) => state.settings.appearance.wallpaper);
+  // My nickname for them, if I gave one; their own name otherwise.
+  const nicknames = useNicknames();
+  const peerName = selfChat
+    ? `${profile?.displayName ?? 'Me'} (You)`
+    : nameFor(peer, nicknames, peerDeleted ? 'Deleted account' : 'Loading');
 
   // Unsent text survives leaving the chat, on this device only.
   const uid = user?.uid;
@@ -141,20 +165,28 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const newestId = newest?.id;
   const newestMine = newest?.senderId === user?.uid;
   const seenNewest = useRef<string | undefined>(undefined);
+  // When the newest seen was sent: a newest that changes because the last
+  // one went (deleted for me, expired) is older, and is not "new".
+  const newestAt = newest?.createdAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  const seenNewestAt = useRef(0);
 
   // Follow new messages only when the reader is already at the bottom --
   // yanking someone out of history they are scrolled up reading is worse than
   // missing an autoscroll. Otherwise count them on the jump button.
   useEffect(() => {
-    const isNew = newestId !== undefined && newestId !== seenNewest.current;
+    const isNew =
+      newestId !== undefined && newestId !== seenNewest.current && newestAt > seenNewestAt.current;
     const firstLoad = seenNewest.current === undefined;
     seenNewest.current = newestId;
+    seenNewestAt.current = Math.max(seenNewestAt.current, newestAt === Number.MAX_SAFE_INTEGER ? 0 : newestAt);
 
     if (atBottom.current || firstLoad) {
       requestAnimationFrame(() => scrollToBottom(!firstLoad));
     } else if (isNew && !newestMine) {
       setUnseen((count) => count + 1);
     }
+    // newestAt moves with newestId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newestId, newestMine, peerTyping]);
 
   // Opening a chat dismisses its notifications, as WhatsApp does.
@@ -187,7 +219,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const byId = useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
 
   const authorOf = (message: DecryptedMessage) =>
-    message.senderId === user?.uid ? 'You' : (peer?.displayName ?? 'Them');
+    message.senderId === user?.uid ? 'You' : nameFor(peer, nicknames, 'Them');
 
   // Quotes are rendered from plaintext already decrypted on this device; the
   // message itself stores only the id it replies to.
@@ -195,7 +227,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     if (!message.replyTo) return null;
     const original = byId.get(message.replyTo);
     if (!original) return { author: '', text: null, deleted: false };
-    return { author: authorOf(original), text: original.text, deleted: original.deleted };
+    return {
+      author: authorOf(original),
+      text: original.viewOnce ? VIEW_ONCE_LABEL : original.text,
+      deleted: original.deleted,
+    };
   }
 
   function replyTo(message: DecryptedMessage) {
@@ -203,7 +239,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       kind: 'reply',
       id: message.id,
       author: authorOf(message),
-      text: message.text,
+      text: message.viewOnce ? VIEW_ONCE_LABEL : message.text,
     });
   }
 
@@ -214,6 +250,38 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     node.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlighted(id);
     setTimeout(() => setHighlighted((current) => (current === id ? null : current)), 1200);
+  }
+
+  // A pinned message may be older than what is loaded: page back until it
+  // is on screen, then jump; give up quietly at the start of the chat.
+  //
+  // Keyed on the oldest loaded message, not the list: a page that brings
+  // nothing older (offline, cache only) leaves it alone, so this waits for the
+  // next tap instead of asking again on every render, forever.
+  const jumpTarget = pendingJump?.id ?? null;
+  const jumpFound = jumpTarget !== null && messages.some((message) => message.id === jumpTarget);
+  const oldestId = messages[0]?.id;
+  useEffect(() => {
+    if (!jumpTarget) return;
+    if (!jumpFound && !exhausted) {
+      void loadOlder();
+      return;
+    }
+    // Next frame: the message is rendered by then, and the state change is
+    // not made in the middle of this render's effects.
+    const frame = requestAnimationFrame(() => {
+      setPendingJump(null);
+      if (jumpFound) jumpTo(jumpTarget);
+    });
+    return () => cancelAnimationFrame(frame);
+    // loadOlder changes with every page; following it would re-ask each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingJump, jumpFound, oldestId, exhausted]);
+
+  function jumpToMessage(id: string) {
+    if (document.getElementById(`m-${id}`)) jumpTo(id);
+    // A new object each tap, so tapping again retries after a stalled load.
+    else setPendingJump({ id });
   }
 
   // Arriving from the Starred screen: /chats/{id}#m-{messageId}. Once, as
@@ -249,7 +317,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     setHit(0);
   }
 
-  function handleSend(text: string) {
+  function handleSend(text: string, options: { viewOnce: boolean } = { viewOnce: false }) {
     const context = composerContext;
     setComposerContext(null);
 
@@ -258,7 +326,53 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       return;
     }
     atBottom.current = true;
-    return sendText(text, context?.kind === 'reply' ? context.id : null);
+    return sendText(text, context?.kind === 'reply' ? context.id : null, false, options.viewOnce);
+  }
+
+  // The selection as it is now, oldest first. A message that went meanwhile
+  // (deleted, expired) simply drops out of it.
+  const selectedMessages = selected
+    ? messages.filter((message) => selected.has(message.id) && !message.failed)
+    : [];
+  const selecting = selected !== null && selectedMessages.length > 0;
+  const allHaveText = selectedMessages.every(
+    (message) => message.text !== null && !message.deleted && !message.viewOnce,
+  );
+  const allStarrable = selectedMessages.every(
+    (message) => !message.deleted && !message.pending && !message.viewOnce,
+  );
+
+  function toggleSelected(id: string) {
+    setSelected((current) => {
+      const next = new Set(current ?? []);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next.size ? next : null;
+    });
+  }
+
+  // Esc leaves selecting, as Back does on a phone.
+  useEffect(() => {
+    if (!selecting) return;
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setSelected(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selecting]);
+
+  /** One message as it is; several as "[time] Name: text" lines, like WhatsApp. */
+  async function copySelection(): Promise<boolean> {
+    const text =
+      selectedMessages.length === 1
+        ? (selectedMessages[0].text ?? '')
+        : selectedMessages
+            .map((message) => `[${message.createdAt ? bubbleTime(message.createdAt) : ''}] ${authorOf(message)}: ${message.text ?? ''}`)
+            .join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // Dialogs follow the message as it is now. One deleted for everyone, or
@@ -327,6 +441,34 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             </svg>
           </button>
         </header>
+      ) : selecting ? (
+        <SelectionBar
+          count={selectedMessages.length}
+          canReply={selectedMessages.length === 1 && !selectedMessages[0].deleted && !blockedByMe}
+          canStar={allStarrable}
+          allStarred={selectedMessages.every((message) => starredIds.has(message.id))}
+          canCopy={allHaveText}
+          canForward={allHaveText}
+          onReply={() => {
+            replyTo(selectedMessages[0]);
+            setSelected(null);
+          }}
+          onStar={(on) => {
+            toggleStar(
+              selectedMessages.map((message) => message.id),
+              on,
+            );
+            setSelected(null);
+          }}
+          onCopy={async () => {
+            const ok = await copySelection();
+            if (ok) setTimeout(() => setSelected(null), 600);
+            return ok;
+          }}
+          onForward={() => setForwardingMany(selectedMessages)}
+          onDelete={() => setDeletingSelection(true)}
+          onCancel={() => setSelected(null)}
+        />
       ) : (
       <header className="flex items-center gap-3 border-b border-line bg-surface px-2 pt-safe">
         <Link
@@ -348,24 +490,27 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         </Link>
 
         <button
-          onClick={() => peer && setInfoOpen(true)}
+          // A chat with myself has no profile to show; its menu has the rest.
+          onClick={() => (selfChat ? setChatMenuOpen(true) : peer && setInfoOpen(true))}
           className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1 text-left"
         >
           <Avatar
-            name={peer?.displayName ?? '?'}
-            photoURL={peer?.photoURL}
+            name={peerName}
+            photoURL={selfChat ? myPhoto : peer?.photoURL}
             size={40}
             online={presence.online}
           />
           <div className="min-w-0">
             <p className="flex items-center gap-1.5 truncate font-semibold">
-              <span className="truncate">{peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Loading')}</span>
+              <span className="truncate">{peerName}</span>
               {disappearing > 0 && (
                 <DisappearingIcon className="size-3.5 shrink-0 text-muted" label={disappearingLabel(disappearing)} />
               )}
             </p>
             <p className="flex items-center gap-1.5 truncate text-[12px] text-muted">
-              {peerTyping ? (
+              {selfChat ? (
+                'Message yourself'
+              ) : peerTyping ? (
                 <>
                   <TypingDots />
                   <span className="text-zing">typing…</span>
@@ -403,6 +548,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       </header>
       )}
 
+      {search === null && <PinnedBar key={`pins-${chatId}`} pinned={pinned} onJump={jumpToMessage} />}
+
       {search !== null && search.trim() && !exhausted && (
         <div className="flex items-center justify-between gap-3 border-b border-line bg-surface px-4 py-1.5 text-[12px] text-faint">
           <span>Searching the messages loaded on this device.</span>
@@ -415,7 +562,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       {keyChanged && peer && acceptedKey !== peer.publicKey && (
         <div className="flex items-start gap-3 border-b border-line bg-surface px-4 py-3">
           <p className="flex-1 text-[13px] leading-relaxed text-muted">
-            <span className="font-medium text-ink">{peer.displayName}&apos;s security key changed.</span>{' '}
+            <span className="font-medium text-ink">{peerName}&apos;s security key changed.</span>{' '}
             That should never happen on Zing. Verify encryption with them before sending anything
             sensitive.
           </p>
@@ -441,7 +588,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
       {disappearing > 0 && (
         <button
-          onClick={() => peer && setInfoOpen(true)}
+          onClick={() => (peer ? setInfoOpen(true) : setChatMenuOpen(true))}
           className="flex items-center justify-center gap-1.5 border-b border-line bg-surface px-4 py-1.5 text-[12px] text-muted"
         >
           <DisappearingIcon className="size-3.5 shrink-0" />
@@ -481,7 +628,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             <span className="text-sm">Decrypting</span>
           </div>
         ) : messages.length === 0 ? (
-          <FirstMessageHint name={peer?.displayName ?? 'them'} />
+          <FirstMessageHint name={nameFor(peer, nicknames, 'them')} self={selfChat} />
         ) : (
           groups.map((group) => (
             <section key={group.messages[0].id} className="space-y-1">
@@ -515,12 +662,25 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
                     }}
                     onRetry={() => retry(message.id)}
                     onDiscard={() => discard(message.id)}
-                    tick={tickState({
-                      pending: message.pending,
-                      createdAt: message.createdAt,
-                      peerDeliveredAt,
-                      peerReadAt,
-                    })}
+                    onOpenViewOnce={() =>
+                      message.text !== null && setViewing({ id: message.id, text: message.text })
+                    }
+                    selecting={selecting}
+                    selected={selected?.has(message.id) ?? false}
+                    onToggleSelect={() => toggleSelected(message.id)}
+                    tick={
+                      // Nobody else to deliver to: kept is as far as it goes.
+                      selfChat
+                        ? message.pending || !message.createdAt
+                          ? 'pending'
+                          : 'delivered'
+                        : tickState({
+                            pending: message.pending,
+                            createdAt: message.createdAt,
+                            peerDeliveredAt,
+                            peerReadAt,
+                          })
+                    }
                   />
                 );
               })}
@@ -560,7 +720,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
       {blockedByMe ? (
         <div className="flex items-center justify-center gap-3 border-t border-line bg-surface px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <p className="text-[13px] text-muted">You blocked {peer?.displayName ?? 'this person'}.</p>
+          <p className="text-[13px] text-muted">You blocked {nameFor(peer, nicknames, 'this person')}.</p>
           <button
             onClick={() => setBlock(false)}
             className="h-9 rounded-full bg-elevated px-4 text-[13px] font-medium text-zing"
@@ -574,8 +734,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           draft={initialDraft}
           onDraftChange={onDraftChange}
           onSend={handleSend}
+          allowViewOnce={!selfChat}
           onTyping={ping}
-          disabled={peerDeleted || blockedByPeer || unavailable || !conversationKey}
+          disabled={peerDeleted || blockedByPeer || unavailable || !conversationKey || !chatKnown}
           disabledText={
             unavailable
               ? "Can’t send here"
@@ -596,6 +757,16 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           mine={menuMessage.senderId === user?.uid}
           myReaction={(user && menuMessage.reactions?.[user.uid]) || null}
           starred={starredIds.has(menuMessage.id)}
+          pinned={pinnedIds.includes(menuMessage.id)}
+          // The rules keep a blocked chat frozen, pins included.
+          onPin={
+            blockedByMe || blockedByPeer || !conversationKey
+              ? undefined
+              : (on) => togglePin(menuMessage.id, on)
+          }
+          canInfo={!selfChat}
+          selfChat={selfChat}
+          onSelect={() => setSelected(new Set([menuMessage.id]))}
           canReact={conversationKey !== null && !peerDeleted && !blockedByMe && !blockedByPeer}
           onReply={() => replyTo(menuMessage)}
           onEdit={() =>
@@ -615,7 +786,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       {infoMessage && !infoMessage.deleted && (
         <MessageInfoSheet
           message={infoMessage}
-          peerName={peer?.displayName ?? 'They'}
+          peerName={nameFor(peer, nicknames, 'They')}
           peerDeliveredAt={peerDeliveredAt}
           peerReadAt={peerReadAt}
           onClose={() => setInfoFor(null)}
@@ -638,9 +809,63 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
         />
       )}
 
+      {deletingSelection && selecting && (
+        <DeleteSelectionSheet
+          count={selectedMessages.length}
+          forEveryone={selectedMessages.every(
+            (message) => message.senderId === user?.uid && !message.deleted,
+          )}
+          selfChat={selfChat}
+          onDeleteForEveryone={() => {
+            selectedMessages.forEach((message) => deleteForEveryone(message.id));
+            setSelected(null);
+          }}
+          onDeleteForMe={() => {
+            deleteForMe(selectedMessages.map((message) => message.id));
+            setSelected(null);
+          }}
+          onClose={() => setDeletingSelection(false)}
+        />
+      )}
+
+      {forwardingMany && user && (
+        <ForwardSheet
+          me={user.uid}
+          preview={
+            forwardingMany.length === 1
+              ? (forwardingMany[0].text ?? '')
+              : `${forwardingMany.length} messages: ${forwardingMany.map((message) => message.text).join(' · ')}`
+          }
+          onClose={() => setForwardingMany(null)}
+          onPick={async (target) => {
+            // In the order they were sent, each sealed afresh for that chat.
+            for (const message of forwardingMany) {
+              if (message.text === null) continue;
+              if (!(await forward(message.text, target))) return false;
+            }
+            setForwardingMany(null);
+            setSelected(null);
+            if (target !== chatId) router.push(`/chats/${target}`);
+            return true;
+          }}
+        />
+      )}
+
+      {viewing && (
+        <ViewOnceSheet
+          text={viewing.text}
+          from={nameFor(peer, nicknames, 'them')}
+          viewer={profile ? `@${profile.username}` : 'Zing'}
+          onOpened={() => openViewOnce(viewing.id)}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
       {infoOpen && peer && (
         <ChatInfoSheet
           peer={peer}
+          nickname={nicknames[peer.uid] ?? null}
+          onNickname={(name) => void setNickname(user!.uid, peer.uid, name).catch(() => undefined)}
           presence={presence}
           blocked={blockedByMe}
           onBlock={setBlock}
@@ -653,8 +878,11 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
       {chatMenuOpen && user && (
         <ChatMenu
-          name={peer?.displayName ?? (peerDeleted ? 'Deleted account' : 'Chat')}
+          name={selfChat ? 'Message yourself' : nameFor(peer, nicknames, peerDeleted ? 'Deleted account' : 'Chat')}
           canBlock={Boolean(peer) && !peerDeleted}
+          // Nothing in a chat with myself ever sends a push.
+          canMute={!selfChat}
+          selfChat={selfChat}
           blocked={blockedByMe}
           muteStatus={muteLabel(prefs, chatId, muteNow)}
           disappearing={disappearing}
@@ -689,7 +917,21 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
 
 const NO_THEME = {};
 
-function FirstMessageHint({ name }: { name: string }) {
+function FirstMessageHint({ name, self }: { name: string; self: boolean }) {
+  if (self) {
+    return (
+      <div className="flex flex-col items-center gap-2 px-10 py-16 text-center">
+        <svg viewBox="0 0 24 24" className="size-8 text-zing/60" aria-hidden="true">
+          <path d="M5 4h11l3 3v13H5zM9 9h6M9 13h6M9 17h3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+        <p className="text-[14px] text-muted">Message yourself</p>
+        <p className="text-[12px] leading-relaxed text-faint">
+          Notes, links and reminders, encrypted with a key only you hold. They follow you to every
+          device you sign in on.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col items-center gap-2 px-10 py-16 text-center">
       <svg viewBox="0 0 24 24" className="size-8 text-zing/60" aria-hidden="true">

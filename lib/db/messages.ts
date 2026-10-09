@@ -25,10 +25,12 @@ import {
 import { db } from '@/lib/firebase/client';
 import { seal, open } from '@/lib/crypto/envelope';
 import { NOTHING_HIDDEN, type HiddenList } from '@/lib/hidden';
+import { VIEW_ONCE_LABEL } from '@/lib/viewOnce';
 import type { Envelope } from '@/lib/crypto/types';
 import {
   MAX_MESSAGE_LENGTH,
   MAX_REACTION_LENGTH,
+  MAX_PINNED_MESSAGES,
   type ChatDoc,
   type MessageDoc,
   type MessageListDoc,
@@ -64,6 +66,8 @@ export async function sendMessage(params: {
   forwarded?: boolean;
   /** The chat's disappearing timer, in seconds; 0 or absent for a lasting message. */
   disappearAfter?: number;
+  /** Shown once to the recipient, then wiped (lib/viewOnce.ts). */
+  viewOnce?: boolean;
 }): Promise<{ id: string; envelope: Envelope; committed: Promise<void> }> {
   if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
@@ -87,16 +91,20 @@ export async function sendMessage(params: {
     // Only when set, so an ordinary message keeps its usual shape.
     ...(params.forwarded ? { forwarded: true } : {}),
     ...(expiresAt ? { expiresAt } : {}),
+    ...(params.viewOnce ? { viewOnce: true } : {}),
   });
 
   // Chat ids are the two uids sorted and joined, so the recipient needs no lookup.
   const recipient = params.chatId.split('_').find((uid) => uid !== params.senderId);
 
   batch.update(doc(db(), 'chats', params.chatId), {
+    // A view-once message's preview says only that: its text would still be
+    // sitting in the list after it had been opened and wiped.
     lastMessage: {
       id: messageRef.id,
-      ciphertext: envelope.ciphertext,
-      nonce: envelope.nonce,
+      ...(params.viewOnce
+        ? { viewOnce: true }
+        : { ciphertext: envelope.ciphertext, nonce: envelope.nonce }),
       senderId: params.senderId,
       ...(expiresAt ? { expiresAt } : {}),
     },
@@ -135,7 +143,61 @@ async function decrypt(
     reactions: deleted ? {} : await openReactions(data.reactions, conversationKey),
     forwarded: !deleted && data.forwarded === true,
     expiresAt: asDate(data.expiresAt),
+    viewOnce: data.viewOnce === true,
+    viewed: Boolean(data.viewedAt),
   };
+}
+
+/**
+ * The recipient opened a view-once message: its ciphertext goes from the
+ * server for good. Called as it is shown, not after, so closing the tab
+ * mid-view cannot leave it openable again.
+ */
+export async function markViewed(chatId: string, messageId: string): Promise<void> {
+  await updateDoc(doc(db(), 'chats', chatId, 'messages', messageId), {
+    ciphertext: deleteField(),
+    nonce: deleteField(),
+    viewedAt: serverTimestamp(),
+  });
+}
+
+/**
+ * Pin a message in the chat, or unpin it. At most MAX_PINNED_MESSAGES: a
+ * fourth replaces the oldest, as on WhatsApp. Either member may change them.
+ */
+export async function setPinnedMessage(
+  chatId: string,
+  messageId: string,
+  on: boolean,
+  current: string[],
+): Promise<void> {
+  const rest = current.filter((id) => id !== messageId);
+  const next = on ? [...rest, messageId].slice(-MAX_PINNED_MESSAGES) : rest;
+  await updateDoc(doc(db(), 'chats', chatId), { pinnedMessages: next });
+}
+
+/**
+ * Some messages of one chat by id, decrypted: what the pinned bar shows for
+ * a pin older than the loaded pages. 30 per query, Firestore's `in` cap.
+ */
+export async function loadMessagesById(
+  chatId: string,
+  ids: string[],
+  conversationKey: Uint8Array,
+): Promise<DecryptedMessage[]> {
+  const pages = await Promise.all(
+    Array.from({ length: Math.ceil(ids.length / 30) }, (_, page) =>
+      getDocs(
+        query(
+          collection(db(), 'chats', chatId, 'messages'),
+          where(documentId(), 'in', ids.slice(page * 30, page * 30 + 30)),
+        ),
+      ),
+    ),
+  );
+  return Promise.all(
+    pages.flatMap((snapshot) => snapshot.docs).map((entry) => decrypt(entry, conversationKey)),
+  );
 }
 
 function asDate(value: unknown): Date | null {
@@ -270,9 +332,9 @@ export async function setReaction(params: {
  * conversation key -- so the server sees only that the ciphertext changed.
  *
  * `isLatest` comes from the thread the caller is looking at. When the edited
- * message is the newest one, the chat-list preview is rewritten in the same
- * batch so the two cannot disagree. updatedAt is left alone: an edit is not new
- * mail and must not bump the chat or mark it unread.
+ * message is the newest one, the chat-list preview is rewritten too (a write
+ * of its own; see below). updatedAt is left alone: an edit is not new mail and
+ * must not bump the chat or mark it unread.
  */
 export async function editMessage(params: {
   chatId: string;
@@ -286,45 +348,47 @@ export async function editMessage(params: {
 }): Promise<void> {
   if (params.text.length > MAX_MESSAGE_LENGTH) throw new Error('MESSAGE_TOO_LONG');
   const envelope = await seal(params.text, params.conversationKey);
-  const batch = writeBatch(db());
 
-  batch.update(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
+  const edit = updateDoc(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
     ciphertext: envelope.ciphertext,
     nonce: envelope.nonce,
     editedAt: serverTimestamp(),
   });
 
-  if (params.isLatest) {
-    batch.update(doc(db(), 'chats', params.chatId), {
-      lastMessage: {
-        id: params.messageId,
-        senderId: params.senderId,
-        ...envelope,
-        // Without it the preview would outlive the message: never shown as
-        // gone, and its ciphertext never stripped.
-        ...(params.expiresAt ? { expiresAt: Timestamp.fromDate(params.expiresAt) } : {}),
-      },
-    });
-  }
+  // The preview on its own write: the rules refuse it if a newer message has
+  // taken the preview meanwhile (this one was queued offline), and that must
+  // not take the edit itself down with it.
+  const preview = params.isLatest
+    ? updateDoc(doc(db(), 'chats', params.chatId), {
+        lastMessage: {
+          id: params.messageId,
+          senderId: params.senderId,
+          ...envelope,
+          // Without it the preview would outlive the message: never shown as
+          // gone, and its ciphertext never stripped.
+          ...(params.expiresAt ? { expiresAt: Timestamp.fromDate(params.expiresAt) } : {}),
+        },
+      }).catch(() => undefined)
+    : Promise.resolve();
 
-  await batch.commit();
+  await Promise.all([edit, preview]);
 }
 
 /**
  * Delete for everyone. The doc stays as a tombstone -- so replies to it and
  * pagination keep working -- but the ciphertext and nonce are removed, so there
  * is nothing left in Firestore to decrypt even for someone holding the key.
- * Reactions go with it.
+ * Reactions go with it, and so does its pin.
  */
 export async function deleteMessage(params: {
   chatId: string;
   messageId: string;
   senderId: string;
   isLatest: boolean;
+  /** Pinned in the chat: unpin it too, or it holds a slot showing nothing. */
+  pinned?: boolean;
 }): Promise<void> {
-  const batch = writeBatch(db());
-
-  batch.update(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
+  const tombstone = updateDoc(doc(db(), 'chats', params.chatId, 'messages', params.messageId), {
     ciphertext: deleteField(),
     nonce: deleteField(),
     reactions: deleteField(),
@@ -332,13 +396,21 @@ export async function deleteMessage(params: {
     deletedAt: serverTimestamp(),
   });
 
-  if (params.isLatest) {
-    batch.update(doc(db(), 'chats', params.chatId), {
-      lastMessage: { id: params.messageId, senderId: params.senderId, deleted: true },
-    });
-  }
+  // Each on its own write, as in editMessage: a preview a newer message has
+  // since replaced is refused, and so is a pin change in a blocked chat --
+  // neither may stop the delete.
+  const preview = params.isLatest
+    ? updateDoc(doc(db(), 'chats', params.chatId), {
+        lastMessage: { id: params.messageId, senderId: params.senderId, deleted: true },
+      }).catch(() => undefined)
+    : Promise.resolve();
+  const unpin = params.pinned
+    ? updateDoc(doc(db(), 'chats', params.chatId), {
+        pinnedMessages: arrayRemove(params.messageId),
+      }).catch(() => undefined)
+    : Promise.resolve();
 
-  await batch.commit();
+  await Promise.all([tombstone, preview, unpin]);
 }
 
 export const DELETED_LABEL = 'This message was deleted';
@@ -400,7 +472,12 @@ export async function clearChat(chatId: string, uid: string): Promise<void> {
 }
 
 export async function hideMessage(chatId: string, uid: string, messageId: string): Promise<void> {
-  await setDoc(hiddenRef(chatId, uid), { uid, ids: arrayUnion(messageId) }, { merge: true });
+  await hideMessages(chatId, uid, [messageId]);
+}
+
+/** "Delete for me" for several at once: one write however many. */
+export async function hideMessages(chatId: string, uid: string, messageIds: string[]): Promise<void> {
+  await setDoc(hiddenRef(chatId, uid), { uid, ids: arrayUnion(...messageIds) }, { merge: true });
 }
 
 /**
@@ -425,12 +502,14 @@ export function subscribeStarred(
 export async function setStarred(
   chatId: string,
   uid: string,
-  messageId: string,
+  messageId: string | string[],
   starred: boolean,
 ): Promise<void> {
+  // One or several: the same single write either way.
+  const ids = Array.isArray(messageId) ? messageId : [messageId];
   await setDoc(
     starredRef(chatId, uid),
-    { uid, ids: starred ? arrayUnion(messageId) : arrayRemove(messageId) },
+    { uid, ids: starred ? arrayUnion(...ids) : arrayRemove(...ids) },
     { merge: true },
   );
 }
@@ -603,6 +682,7 @@ export async function decryptPreview(
   const expiresAt = timestampMs(lastMessage?.expiresAt);
   if (expiresAt !== null && expiresAt <= Date.now()) return EXPIRED_LABEL;
   if (lastMessage?.deleted) return DELETED_LABEL;
+  if (lastMessage?.viewOnce) return VIEW_ONCE_LABEL;
   if (!lastMessage?.ciphertext || !lastMessage.nonce || !conversationKey) return null;
   return open({ ciphertext: lastMessage.ciphertext, nonce: lastMessage.nonce }, conversationKey);
 }

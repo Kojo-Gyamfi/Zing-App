@@ -14,7 +14,8 @@ export function findMatches(messages: DecryptedMessage[], query: string): string
   const needle = normalizeForSearch(query.trim());
   if (!needle) return [];
   return messages
-    .filter((message) => !message.deleted && message.text !== null)
+    // A view-once message is never searchable: that would show it twice.
+    .filter((message) => !message.deleted && !message.viewOnce && message.text !== null)
     .filter((message) => normalizeForSearch(message.text!).includes(needle))
     .map((message) => message.id);
 }

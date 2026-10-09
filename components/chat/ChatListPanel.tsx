@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useChatList, type ChatListRow } from '@/lib/hooks/useChatList';
@@ -13,7 +13,8 @@ import { useMuteClock } from '@/lib/hooks/useMuteClock';
 import { listTime } from '@/lib/format';
 import { setAppBadge } from '@/lib/badge';
 import { plainText } from '@/lib/formatting';
-import { useMyPhoto } from '@/lib/store/account';
+import { useMyPhoto, useNicknames } from '@/lib/store/account';
+import { nameFor } from '@/lib/names';
 import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
@@ -41,6 +42,17 @@ export function ChatListPanel() {
   const [listFilter, setListFilter] = useState<ListFilter>('all');
   const [menuFor, setMenuFor] = useState<ChatListRow | null>(null);
   const myUid = useSession((state) => state.user?.uid);
+  const nicknames = useNicknames();
+  // What each row is called: my nickname for them, their name, or -- in the
+  // chat with myself -- my own name, marked as me.
+  const myName = profile?.displayName;
+  const labelOf = useCallback(
+    (row: ChatListRow) =>
+      row.self
+        ? `${myName ?? 'Me'} (You)`
+        : nameFor(row.peer, nicknames, row.peerDeleted ? 'Deleted account' : 'Unknown'),
+    [myName, nicknames],
+  );
   const prefs = useChatPrefs(myUid);
   const typing = useTypingChats(
     myUid,
@@ -68,8 +80,10 @@ export function ChatListPanel() {
     if (needle) {
       return rows.filter(
         (row) =>
-          row.peer?.displayName.toLowerCase().includes(needle) ||
-          row.peer?.username.includes(needle),
+          labelOf(row).toLowerCase().includes(needle) ||
+          Boolean(row.peer?.displayName.toLowerCase().includes(needle)) ||
+          Boolean(row.peer?.username.includes(needle)) ||
+          (row.self && 'message yourself'.includes(needle)),
       );
     }
     if (showArchived) return archivedRows;
@@ -86,9 +100,17 @@ export function ChatListPanel() {
       ...inbox.filter((row) => flags.pinned.has(row.id)),
       ...inbox.filter((row) => !flags.pinned.has(row.id)),
     ];
-  }, [rows, filter, showArchived, archivedRows, flags, listFilter, pathname]);
+  }, [rows, filter, showArchived, archivedRows, flags, listFilter, pathname, labelOf]);
 
   const archivedUnread = archivedRows.filter((row) => row.unread).length;
+
+  // Searching, Archived and the filters look at loaded chats only, and the
+  // next page loads on scroll -- which a short result list never does. Load
+  // the rest while one of them is in use, a page at a time.
+  const narrowed = searching || showArchived || listFilter !== 'all';
+  useEffect(() => {
+    if (narrowed && hasMore && !loading) loadMore();
+  }, [narrowed, hasMore, loading, rows.length, loadMore]);
 
   // Unsent text per chat, from this device only. See lib/store/drafts.ts.
   const openDrafts = useDrafts((state) => state.open);
@@ -205,7 +227,7 @@ export function ChatListPanel() {
           }
         }}
       >
-        {!loading && !showArchived && !searching && listFilter === 'all' && archivedRows.length > 0 && (
+        {!loading && !showArchived && !searching && listFilter === 'all' && (archivedRows.length > 0 || prefs.archived.length > 0) && (
           <button
             onClick={() => setShowArchived(true)}
             className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-surface"
@@ -217,7 +239,7 @@ export function ChatListPanel() {
             </span>
             <span className="flex-1 font-semibold">Archived</span>
             <span className={`text-[13px] ${archivedUnread ? 'text-zing' : 'text-faint'}`}>
-              {archivedUnread || archivedRows.length}
+              {archivedUnread || Math.max(archivedRows.length, prefs.archived.length)}
             </span>
           </button>
         )}
@@ -235,6 +257,8 @@ export function ChatListPanel() {
               <ChatRow
                 key={row.id}
                 row={row}
+                name={labelOf(row)}
+                photoURL={row.self ? myPhoto : row.peer?.photoURL}
                 active={pathname === `/chats/${row.id}`}
                 typing={typing.has(row.id)}
                 draft={drafts[row.id]}
@@ -264,12 +288,14 @@ export function ChatListPanel() {
 
       {menuFor && (
         <ChatRowMenu
-          name={menuFor.peer?.displayName ?? (menuFor.peerDeleted ? 'Deleted account' : 'Chat')}
+          name={labelOf(menuFor)}
           pinned={flags.pinned.has(menuFor.id)}
           muteStatus={muteLabel(prefs, menuFor.id, now)}
           archived={flags.archived.has(menuFor.id)}
           favourite={flags.favourites.has(menuFor.id)}
-          pinnedCount={rows.filter((row) => flags.pinned.has(row.id) && !flags.archived.has(row.id)).length}
+          // From the prefs, not the loaded rows: a quiet pinned chat past the
+          // first page still holds one of the slots.
+          pinnedCount={prefs.pinned.filter((id) => !flags.archived.has(id)).length}
           onPin={(on) => toggle('pinned', menuFor.id, on)}
           onMute={(duration) => {
             if (myUid) void setMute(myUid, menuFor.id, duration).catch(() => undefined);
@@ -289,6 +315,8 @@ export function ChatListPanel() {
  */
 function ChatRow({
   row,
+  name,
+  photoURL,
   active,
   typing,
   draft,
@@ -297,6 +325,9 @@ function ChatRow({
   onMenu,
 }: {
   row: ChatListRow;
+  /** What to call this chat: see labelOf. */
+  name: string;
+  photoURL: string | null | undefined;
   active: boolean;
   typing: boolean;
   /** Unsent text on this device. */
@@ -352,13 +383,11 @@ function ChatRow({
         className={`flex items-center gap-3 px-4 py-3 transition-colors select-none [-webkit-touch-callout:none]
           ${active ? 'bg-elevated' : 'hover:bg-surface'}`}
       >
-        <Avatar name={row.peer?.displayName ?? '?'} photoURL={row.peer?.photoURL} size={50} />
+        <Avatar name={name} photoURL={photoURL} size={50} />
 
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="truncate font-semibold">
-              {row.peer?.displayName ?? (row.peerDeleted ? 'Deleted account' : 'Unknown')}
-            </span>
+            <span className="truncate font-semibold">{name}</span>
             <span className={`shrink-0 text-[12px] ${row.unread && !muted ? 'text-zing' : 'text-faint'}`}>
               {listTime(row.updatedAt)}
             </span>
@@ -374,7 +403,7 @@ function ChatRow({
                   {draft.replace(/\s+/g, ' ')}
                 </>
               ) : row.preview === null ? (
-                row.lastSenderId ? 'Encrypted message' : 'Say hello'
+                row.lastSenderId ? 'Encrypted message' : row.self ? 'Notes, links and reminders to yourself' : 'Say hello'
               ) : (
                 plainText(row.preview)
               )}

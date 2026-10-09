@@ -28,6 +28,11 @@ type ProfileState = {
   verified: Record<string, true>;
   pending: Record<string, Promise<UserDoc | null>>;
   load: (uid: string, options?: { fresh?: boolean }) => Promise<UserDoc | null>;
+  /**
+   * Forget everything, on sign-out. A profile here may carry a contacts-only
+   * photo the next account on this tab is not allowed to see.
+   */
+  reset: () => void;
 };
 
 export const useProfiles = create<ProfileState>((set, get) => ({
@@ -35,6 +40,8 @@ export const useProfiles = create<ProfileState>((set, get) => ({
   missing: {},
   verified: {},
   pending: {},
+
+  reset: () => set({ profiles: {}, missing: {}, verified: {}, pending: {} }),
 
   load: async (uid, { fresh = false } = {}) => {
     const state = get();

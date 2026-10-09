@@ -63,14 +63,26 @@ export default function UnlockPage() {
     try {
       // Argon2id is deliberately slow -- a second or two here is the cost that
       // makes the stored backup useless to anyone brute-forcing it.
-      const privateKey = await unwrapPrivateKey(profile!.keyBackup, passphrase);
+      let current = profile!;
+      let privateKey = await unwrapPrivateKey(current.keyBackup, passphrase);
+
+      // The backup here was read when this screen opened. A passphrase just
+      // changed on another phone wraps a newer one: fetch it and try that,
+      // rather than refuse the right passphrase until a reload.
+      if (!privateKey) {
+        const latest = await getUser(current.uid).catch(() => null);
+        if (latest && JSON.stringify(latest.keyBackup) !== JSON.stringify(current.keyBackup)) {
+          current = latest;
+          privateKey = await unwrapPrivateKey(current.keyBackup, passphrase);
+        }
+      }
 
       if (!privateKey) {
         setError('That passphrase did not work.');
         setBusy(false);
         return;
       }
-      if (!(await matchesPublicKey(privateKey, profile!.publicKey))) {
+      if (!(await matchesPublicKey(privateKey, current.publicKey))) {
         setError(MISMATCH);
         setBusy(false);
         return;
@@ -79,7 +91,7 @@ export default function UnlockPage() {
       // Storage that will not keep the key still lets this session in; the
       // passphrase is asked again next launch.
       await saveIdentity(privateKey).catch(() => undefined);
-      setIdentity({ privateKey, publicKey: await publicKeyFrom(privateKey) }, profile!);
+      setIdentity({ privateKey, publicKey: await publicKeyFrom(privateKey) }, current);
       router.replace(returnPath());
     } catch {
       // libsodium failed to load (offline on a first visit, say).
@@ -143,9 +155,11 @@ export default function UnlockPage() {
       // The old passphrase is gone, so the backup it wrapped is useless --
       // replace it before entering, or the next new device would be stuck too.
       await updateKeyBackup(profile!.uid, await wrapPrivateKey(recovered, newPassphrase));
-      await saveIdentity(recovered);
+      // As in unlock(): storage that will not keep the key must not strand
+      // someone whose new passphrase is already saved.
+      await saveIdentity(recovered).catch(() => undefined);
 
-      const fresh = (await getUser(profile!.uid)) ?? profile!;
+      const fresh = (await getUser(profile!.uid).catch(() => null)) ?? profile!;
       setIdentity({ privateKey: recovered, publicKey: await publicKeyFrom(recovered) }, fresh);
       router.replace(returnPath());
     } catch {
