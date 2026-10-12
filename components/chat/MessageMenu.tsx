@@ -20,6 +20,7 @@ export function MessageMenu({
   pinned = false,
   onPin,
   onSelect,
+  onTranslate,
   selfChat = false,
   canInfo = true,
   canReact,
@@ -44,6 +45,8 @@ export function MessageMenu({
   onPin?: (on: boolean) => void;
   /** Start selecting several messages, this one first. */
   onSelect?: () => void;
+  /** Absent where the browser cannot translate on the device. */
+  onTranslate?: () => void;
   /** "Message yourself": nobody else holds a copy, so one Delete does it. */
   selfChat?: boolean;
   /** False in a chat with myself: no receipts to show. */
@@ -205,6 +208,16 @@ export function MessageMenu({
                 icon="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM8 12.5l2.5 2.5L16 9.5"
                 onClick={() => {
                   onSelect();
+                  onClose();
+                }}
+              />
+            )}
+            {onTranslate && text !== null && !message.deleted && (
+              <Action
+                label="Translate"
+                icon="M4 5h8M8 3v2M5.5 5c0 4 3 7 6.5 8.5M10.5 5c-.5 3.5-3 6.5-6.5 8M13 21l4-9 4 9M14.5 18h5"
+                onClick={() => {
+                  onTranslate();
                   onClose();
                 }}
               />

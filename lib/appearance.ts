@@ -13,10 +13,17 @@ export type ThemeChoice = 'system' | 'light' | 'dark';
 export const WALLPAPERS = ['doodles', 'plain', 'ocean', 'forest', 'dusk', 'sand'] as const;
 export type Wallpaper = (typeof WALLPAPERS)[number];
 
-export type Appearance = { theme: ThemeChoice; wallpaper: Wallpaper };
+/**
+ * How big message text is, in chats and the box you type in. One attribute
+ * on <html> (data-text-size), turned into --chat-text in app/globals.css.
+ */
+export const TEXT_SIZES = ['small', 'default', 'large', 'xlarge'] as const;
+export type TextSize = (typeof TEXT_SIZES)[number];
+
+export type Appearance = { theme: ThemeChoice; wallpaper: Wallpaper; textSize: TextSize };
 
 /** Zing was dark-only before this existed; existing users keep that look. */
-export const DEFAULT_APPEARANCE: Appearance = { theme: 'dark', wallpaper: 'doodles' };
+export const DEFAULT_APPEARANCE: Appearance = { theme: 'dark', wallpaper: 'doodles', textSize: 'default' };
 
 export const STORAGE_KEY = 'zing:appearance';
 
@@ -32,7 +39,10 @@ export function toAppearance(value: unknown): Appearance {
   const wallpaper = (WALLPAPERS as readonly string[]).includes(raw.wallpaper as string)
     ? (raw.wallpaper as Wallpaper)
     : DEFAULT_APPEARANCE.wallpaper;
-  return { theme, wallpaper };
+  const textSize = (TEXT_SIZES as readonly string[]).includes(raw.textSize as string)
+    ? (raw.textSize as TextSize)
+    : DEFAULT_APPEARANCE.textSize;
+  return { theme, wallpaper, textSize };
 }
 
 /**
@@ -41,7 +51,7 @@ export function toAppearance(value: unknown): Appearance {
  */
 export const APPEARANCE_SCRIPT = `(function(){try{var a=JSON.parse(localStorage.getItem(${JSON.stringify(
   STORAGE_KEY,
-)})||"{}"),t=a.theme,d=document.documentElement;if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";if(t==="light"||t==="dark")d.setAttribute("data-theme",t);if(typeof a.wallpaper==="string")d.setAttribute("data-wallpaper",a.wallpaper)}catch(e){}})()`;
+)})||"{}"),t=a.theme,d=document.documentElement;if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";if(t==="light"||t==="dark")d.setAttribute("data-theme",t);if(typeof a.wallpaper==="string")d.setAttribute("data-wallpaper",a.wallpaper);if(typeof a.textSize==="string")d.setAttribute("data-text-size",a.textSize)}catch(e){}})()`;
 
 export function resolveTheme(theme: ThemeChoice): 'light' | 'dark' {
   if (theme !== 'system') return theme;
@@ -54,6 +64,7 @@ export function applyAppearance(appearance: Appearance): void {
   const theme = resolveTheme(appearance.theme);
   root.setAttribute('data-theme', theme);
   root.setAttribute('data-wallpaper', appearance.wallpaper);
+  root.setAttribute('data-text-size', appearance.textSize);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[theme]);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appearance));

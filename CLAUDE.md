@@ -210,6 +210,20 @@ rather than letting every decryption fail mysteriously.
   (`proofread`); "Add to dictionary" words stay in this device's localStorage and are cleared at
   sign-out. It uses `LocalLinter`, not `WorkerLinter`: the worker version needs `blob:` workers in
   the CSP, and its download was aborted in Chrome.
+- **Mark as unread is `markedUnread` on the account doc**: my mark only, never anyone's receipts.
+  It shows as a dot, counts under the Unread filter, and opening the chat clears it. "Mark as read"
+  on a really-unread chat writes a receipt only if read receipts are on.
+- **Text size is `appearance.textSize`**: `data-text-size` on `<html>` (set by the same inline
+  script as the theme) becomes `--chat-text` for bubbles and `--composer-text` (never under 16px,
+  or iOS zooms) for the composer and its underline mirror.
+- **Translation is on-device only** (`lib/translate.ts`: Chrome's built-in Translator and
+  LanguageDetector APIs). "Translate" isn't offered where they're missing. Never a cloud
+  translator. Translations live in page state and are never stored.
+- **Replying from a notification never gives the service worker a session.** `public/sw.js`
+  writes the typed reply to the `outbox` IndexedDB store (its only write) and nudges an open tab, or
+  opens the chat. `components/OutboxSender.tsx` takes the outbox in one transaction and sends each
+  reply sealed like any message. Browsers without inline replies open `/chats/<id>?reply=1`, with
+  the composer focused.
 - **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
   replaces the header with the actions that fit every selected message. Bulk delete-for-me and
   star are one write each (`hideMessages`, `setStarred` with an array).

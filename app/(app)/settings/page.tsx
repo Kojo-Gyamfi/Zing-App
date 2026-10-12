@@ -34,6 +34,7 @@ import {
 import { StorageSettings, storageSummary, useStorageEstimate } from '@/components/settings/StorageSettings';
 import { AboutSettings, ChatsSettings, useDraftCount } from '@/components/settings/ChatsSettings';
 import { WALLPAPER_NAMES } from '@/components/settings/WallpaperPicker';
+import { TEXT_SIZE_LABELS } from '@/components/settings/AppearanceSettings';
 import { QrScanner } from '@/components/QrScanner';
 import { TypingSettings, typingSummary } from '@/components/settings/TypingSettings';
 import { useAccount } from '@/lib/store/account';
@@ -367,7 +368,9 @@ export default function SettingsPage() {
   const summaries: Record<SectionId, string> = {
     profile: `@${profile.username} · ${profile.displayName}`,
     share: 'Your QR code and link, and scanning a friend’s',
-    appearance: `${theme} theme · ${WALLPAPER_NAMES[appearance.wallpaper]} wallpaper`,
+    appearance: `${theme} theme · ${WALLPAPER_NAMES[appearance.wallpaper]} wallpaper${
+      appearance.textSize === 'default' ? '' : ` · ${TEXT_SIZE_LABELS[appearance.textSize]} text`
+    }`,
     privacy: [
       privacy.readReceipts ? 'Read receipts on' : 'Read receipts off',
       privacy.lastSeen ? 'last seen on' : 'last seen off',

@@ -10,6 +10,7 @@ import type { ReactionChip } from '@/lib/reactions';
 import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
 import { VIEW_ONCE_LABEL, viewOnceState } from '@/lib/viewOnce';
+import { languageName, type Translation } from '@/lib/translate';
 
 /** How far a bubble must be dragged right before letting go counts as "reply". */
 const SWIPE_TO_REPLY = 56;
@@ -154,6 +155,8 @@ export function MessageBubble({
   selecting = false,
   selected = false,
   onToggleSelect,
+  translation,
+  onHideTranslation,
 }: {
   message: DecryptedMessage;
   mine: boolean;
@@ -185,6 +188,9 @@ export function MessageBubble({
   selecting?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+  /** This message in my language, translated on this device (lib/translate.ts). */
+  translation?: Translation;
+  onHideTranslation?: () => void;
 }) {
   const x = useMotionValue(0);
   // The reply arrow fades in as the bubble is pulled towards the threshold.
@@ -303,7 +309,7 @@ export function MessageBubble({
         }}
         // pan-y keeps vertical scrolling native while the bubble owns
         // horizontal drags; no-callout stops iOS's own long-press menu.
-        className={`group relative max-w-[78%] touch-pan-y px-3 py-2 text-[15px] leading-snug
+        className={`group relative max-w-[78%] touch-pan-y px-3 py-2 text-(length:--chat-text) leading-snug
           ${selecting && !mine ? 'ml-8' : ''}
           select-none [-webkit-touch-callout:none] md:select-text
           ${mine ? 'bg-bubble-out text-ink' : 'bg-bubble-in text-ink'}
@@ -402,6 +408,36 @@ export function MessageBubble({
               ))}
             </span>
             {card && <LinkPreview card={card} />}
+            {translation && (
+              <span className="mt-1.5 block border-t border-ink/10 pt-1.5" aria-live="polite">
+                {translation.state === 'done' && (
+                  <span className="block break-words whitespace-pre-wrap">
+                    <FormattedText text={translation.text} />
+                  </span>
+                )}
+                <span className="mt-0.5 flex items-center justify-between gap-3 text-[11px] text-muted">
+                  <span className="italic">
+                    {translation.state === 'working'
+                      ? 'Translating on this device…'
+                      : translation.state === 'done'
+                        ? `Translated from ${languageName(translation.from)}`
+                        : translation.state === 'same'
+                          ? `Already in ${languageName(translation.from)}`
+                          : translation.reason}
+                  </span>
+                  {translation.state !== 'working' && (
+                    <button
+                      type="button"
+                      onClick={onHideTranslation}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      className="font-medium text-zing-soft"
+                    >
+                      Hide
+                    </button>
+                  )}
+                </span>
+              </span>
+            )}
           </>
         )}
 

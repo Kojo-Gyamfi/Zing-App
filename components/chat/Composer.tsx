@@ -23,6 +23,7 @@ export function Composer({
   draft = '',
   onDraftChange,
   allowViewOnce = false,
+  autoFocus = false,
 }: {
   onSend: (text: string, options: { viewOnce: boolean }) => void | Promise<void>;
   onTyping: () => void;
@@ -37,11 +38,16 @@ export function Composer({
   onDraftChange?: (text: string) => void;
   /** Offer the view-once switch (not in a chat with myself). */
   allowViewOnce?: boolean;
+  /** Keyboard up as soon as typing is possible: "Reply" from a notification. */
+  autoFocus?: boolean;
 }) {
   // The next message goes as view once (lib/viewOnce.ts). Off after each
   // send, as on WhatsApp, so it is never left on by accident.
   const [text, setText] = useState(draft);
   const [viewOnce, setViewOnce] = useState(false);
+  useEffect(() => {
+    if (autoFocus && !disabled) box.current?.focus();
+  }, [autoFocus, disabled]);
   // Spelling and grammar, checked on this device (lib/proofread.ts).
   const proof = useProofread(text, !disabled);
   const mirror = useRef<HTMLDivElement>(null);
@@ -322,7 +328,7 @@ export function Composer({
             <div
               ref={mirror}
               aria-hidden="true"
-              className={`pointer-events-none absolute inset-0 overflow-hidden py-3 text-[16px] leading-snug
+              className={`pointer-events-none absolute inset-0 overflow-hidden py-3 text-(length:--composer-text) leading-snug
                 break-words whitespace-pre-wrap text-transparent ${allowViewOnce && !editing ? 'pr-1' : 'pr-4'}`}
             >
               {underlined(text, proof.issues)}
@@ -388,7 +394,7 @@ export function Composer({
             maxLength={MAX_MESSAGE_LENGTH}
             /* 16px keeps iOS from zooming the viewport when the field takes focus. */
             className={`relative block max-h-[140px] min-h-[44px] w-full resize-none bg-transparent py-3
-              text-[16px] leading-snug break-words whitespace-pre-wrap text-ink placeholder:text-faint
+              text-(length:--composer-text) leading-snug break-words whitespace-pre-wrap text-ink placeholder:text-faint
               focus:outline-none disabled:opacity-50 ${allowViewOnce && !editing ? 'pr-1' : 'pr-4'}`}
           />
           </div>

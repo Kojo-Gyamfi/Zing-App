@@ -33,10 +33,12 @@ export type ChatPrefs = {
   mutedUntil: Record<string, Date>;
   archived: string[];
   favourites: string[];
+  /** Marked unread by hand ("come back to this"); cleared on opening. */
+  markedUnread: string[];
 };
 
 /** The id-list preferences, the ones setChatPref toggles. */
-export type ChatListPref = 'pinned' | 'muted' | 'archived' | 'favourites';
+export type ChatListPref = 'pinned' | 'muted' | 'archived' | 'favourites' | 'markedUnread';
 
 export const NO_PREFS: ChatPrefs = {
   pinned: [],
@@ -44,6 +46,7 @@ export const NO_PREFS: ChatPrefs = {
   mutedUntil: {},
   archived: [],
   favourites: [],
+  markedUnread: [],
 };
 
 /** Everything on the account doc the app reads, with defaults filled in. */
@@ -103,6 +106,7 @@ export function subscribeAccount(
             ),
             archived: data?.archived ?? [],
             favourites: data?.favourites ?? [],
+            markedUnread: data?.markedUnread ?? [],
           },
           privacy: { ...DEFAULT_PRIVACY, ...data?.privacy },
           blocked: data?.blocked ?? [],

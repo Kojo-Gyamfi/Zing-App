@@ -34,6 +34,7 @@ import { PinnedBar } from '@/components/chat/PinnedBar';
 import { ViewOnceSheet } from '@/components/chat/ViewOnceSheet';
 import { DeleteSelectionSheet, SelectionBar } from '@/components/chat/SelectionBar';
 import { bubbleTime } from '@/lib/format';
+import { canTranslate, translateMessage, type Translation } from '@/lib/translate';
 import { setChatPref, setChatTheme, setMute, setNickname } from '@/lib/db/prefs';
 import { muteLabel } from '@/lib/mute';
 
@@ -59,6 +60,24 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [deletingSelection, setDeletingSelection] = useState(false);
   const [forwardingMany, setForwardingMany] = useState<DecryptedMessage[] | null>(null);
+  // Opened from a notification's "Reply" (lib/sw.js): the keyboard comes up
+  // in the box. The flag is taken off the address so a reload does not repeat it.
+  const [replying] = useState(
+    () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('reply') === '1',
+  );
+  useEffect(() => {
+    if (replying) window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+  }, [replying]);
+
+  // Messages translated on this device, by id. Kept only while the chat is open.
+  const [translations, setTranslations] = useState<Record<string, Translation>>({});
+
+  async function translate(message: DecryptedMessage) {
+    if (message.text === null) return;
+    setTranslations((current) => ({ ...current, [message.id]: { state: 'working' } }));
+    const result = await translateMessage(message.text);
+    setTranslations((current) => ({ ...current, [message.id]: result }));
+  }
   // A pinned message older than the loaded pages: load back until it shows.
   const [pendingJump, setPendingJump] = useState<{ id: string } | null>(null);
 
@@ -116,6 +135,12 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const peerName = selfChat
     ? `${profile?.displayName ?? 'Me'} (You)`
     : nameFor(peer, nicknames, peerDeleted ? 'Deleted account' : 'Loading');
+
+  // Opening a chat marked unread by hand takes the mark off, as on WhatsApp.
+  const markedUnread = prefs.markedUnread.includes(chatId);
+  useEffect(() => {
+    if (user && markedUnread) void setChatPref(user.uid, 'markedUnread', chatId, false).catch(() => undefined);
+  }, [user, markedUnread, chatId]);
 
   // Unsent text survives leaving the chat, on this device only.
   const uid = user?.uid;
@@ -665,6 +690,14 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
                     onOpenViewOnce={() =>
                       message.text !== null && setViewing({ id: message.id, text: message.text })
                     }
+                    translation={translations[message.id]}
+                    onHideTranslation={() =>
+                      setTranslations((current) => {
+                        const next = { ...current };
+                        delete next[message.id];
+                        return next;
+                      })
+                    }
                     selecting={selecting}
                     selected={selected?.has(message.id) ?? false}
                     onToggleSelect={() => toggleSelected(message.id)}
@@ -735,6 +768,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           onDraftChange={onDraftChange}
           onSend={handleSend}
           allowViewOnce={!selfChat}
+          autoFocus={replying}
           onTyping={ping}
           disabled={peerDeleted || blockedByPeer || unavailable || !conversationKey || !chatKnown}
           disabledText={
@@ -767,6 +801,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           canInfo={!selfChat}
           selfChat={selfChat}
           onSelect={() => setSelected(new Set([menuMessage.id]))}
+          onTranslate={canTranslate() ? () => void translate(menuMessage) : undefined}
           canReact={conversationKey !== null && !peerDeleted && !blockedByMe && !blockedByPeer}
           onReply={() => replyTo(menuMessage)}
           onEdit={() =>
