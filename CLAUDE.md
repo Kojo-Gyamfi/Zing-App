@@ -236,6 +236,10 @@ rather than letting every decryption fail mysteriously.
 - **Export builds the file on the device** (`lib/export.ts`, with `loadAllMessages` paging the
   whole chat from the server as ciphertext). The file is unencrypted, and the sheet says so. It
   never contains a view-once text, and it respects "Delete for me", clear chat and expiry.
+- **Emoji search runs on the device** (`lib/emojiSearch.ts`) over `components/chat/emojiKeywords.ts`,
+  generated from emojibase-data (Unicode CLDR names and tags) by `scripts/gen-emoji-keywords.mjs`
+  for exactly the emoji in `emojiData.ts`. Re-run the script after changing the picker. The words
+  load lazily the first time someone searches, and are never fetched from anywhere else.
 - **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
   replaces the header with the actions that fit every selected message. Bulk delete-for-me and
   star are one write each (`hideMessages`, `setStarred` with an array).

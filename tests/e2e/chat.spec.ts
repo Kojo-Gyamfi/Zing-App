@@ -910,3 +910,41 @@ test('send a location, search every chat, and export one', async ({ browser }) =
   expect(contents).toContain('You: Location: 5.603700, -0.187000');
   await samContext.close();
 });
+
+test('searching for an emoji, in the composer and for a reaction', async ({ browser }) => {
+  const ola = await newPhone(browser);
+  const olaHandle = `ola_${run}`;
+  await signInWithGoogle(ola, olaHandle);
+  await onboard(ola, olaHandle);
+  await ola.getByRole('link', { name: 'New chat' }).click();
+  await ola.getByRole('button', { name: /Message yourself/ }).click();
+  // The dev server's tools button sits over the emoji button at phone width.
+  await ola.evaluate(() => document.querySelector('nextjs-portal')?.remove());
+
+  // Composer: search by a tag, tap a result, keep searching, Enter takes the best match.
+  await ola.getByPlaceholder('Message').fill('party ');
+  await ola.getByRole('button', { name: 'Emoji' }).click();
+  const search = ola.getByLabel('Search emoji');
+  await search.fill('lol');
+  const found = ola.getByRole('region', { name: 'Emoji found' });
+  await found.getByRole('button', { name: /face with tears of joy/ }).click();
+  await expect(ola.getByPlaceholder('Message')).toHaveValue('party 😂');
+  await expect(search).toBeFocused();
+  await search.fill('fire');
+  await search.press('Enter');
+  await expect(ola.getByPlaceholder('Message')).toHaveValue('party 😂🔥');
+  await search.fill('zzqqx');
+  await expect(ola.getByText('No emoji found')).toBeVisible();
+  await ola.getByRole('button', { name: 'Clear search' }).click();
+  await expect(ola.getByRole('tablist', { name: 'Emoji categories' })).toBeVisible();
+  await ola.getByRole('button', { name: 'Send' }).click();
+  await expect(ola.getByRole('main').getByText('party 😂🔥')).toBeVisible();
+
+  // Reaction picker: the same search.
+  await openMenu(ola, 'party 😂🔥');
+  await ola.getByRole('button', { name: 'More reactions' }).click();
+  const actions = ola.getByRole('dialog', { name: 'Message actions' });
+  await actions.getByLabel('Search emoji').fill('ghana');
+  await actions.getByRole('region', { name: 'Emoji found' }).getByRole('button', { name: /flag: ghana/i }).click();
+  await expect(ola.getByRole('main').getByRole('button', { name: /^Reactions: 🇬🇭 1/ })).toBeVisible();
+});
