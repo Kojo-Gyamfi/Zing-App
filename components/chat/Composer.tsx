@@ -187,8 +187,10 @@ export function Composer({
       grow();
       const node = box.current;
       if (!node) return;
-      // Refocusing on a phone would bring the keyboard back over the panel.
-      if (!isTouch()) node.focus();
+      // Refocusing on a phone would bring the keyboard back over the panel,
+      // and taking focus from the emoji search would end the search.
+      const searching = document.activeElement?.closest('[data-emoji-panel]');
+      if (!isTouch() && !searching) node.focus();
       node.setSelectionRange(position, position);
     });
   }
