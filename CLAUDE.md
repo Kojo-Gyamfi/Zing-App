@@ -224,6 +224,18 @@ rather than letting every decryption fail mysteriously.
   opens the chat. `components/OutboxSender.tsx` takes the outbox in one transaction and sends each
   reply sealed like any message. Browsers without inline replies open `/chats/<id>?reply=1`, with
   the composer focused.
+- **A shared location is text inside the ciphertext**: `zing-location:` + JSON (`lib/location.ts`),
+  sealed by `envelope.ts` like any message, so the server can't tell a location was sent. It renders
+  as a card linking to the device's maps app. Never draw map tiles inline: loading them would tell
+  the tile server where the sender is. `Permissions-Policy` allows `geolocation=(self)` for it.
+  Previews, pushes and exports say "📍 Location" or print coordinates, never the raw marker.
+- **Search across chats runs over Firestore's offline cache only** (`useMessageSearch`,
+  `cachedMessages` uses `getDocsFromCache`), decrypted in memory and never stored. It finds only what
+  this device has loaded, and the UI says so. Hidden, cleared, expired, view-once and location
+  messages are left out. A hit opens `/chats/<id>#m-<msgId>`, which pages back if it has to.
+- **Export builds the file on the device** (`lib/export.ts`, with `loadAllMessages` paging the
+  whole chat from the server as ciphertext). The file is unencrypted, and the sheet says so. It
+  never contains a view-once text, and it respects "Delete for me", clear chat and expiry.
 - **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
   replaces the header with the actions that fit every selected message. Bulk delete-for-me and
   star are one write each (`hideMessages`, `setStarred` with an array).
@@ -261,5 +273,5 @@ Other manual checks live in README.md ("Testing it works").
 ## Out of scope for v1
 
 Encrypted media, group chats, voice/video calls, forward secrecy (one key per conversation, not per
-message), server-side search (search inside a chat runs over plaintext on the device, `lib/search.ts`),
+message), server-side search (search runs over plaintext on the device, `lib/search.ts`),
 contact discovery (browsers cannot read a phone's contacts).

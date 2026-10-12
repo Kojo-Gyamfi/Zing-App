@@ -245,7 +245,13 @@ self.addEventListener('push', (event) => {
       const text =
         previews && ciphertext && nonce ? await decryptPreview(chatId, ciphertext, nonce) : null;
       // A view-once message arrives with no ciphertext at all; say what it is.
-      const line = viewOnce === '1' ? 'View once message' : (text ?? 'New message');
+      // A shared location says so; its coordinates never sit in a notification.
+      const line =
+        viewOnce === '1'
+          ? 'View once message'
+          : text && text.startsWith('zing-location:')
+            ? '📍 Location'
+            : (text ?? 'New message');
 
       // One notification per conversation, growing as messages arrive:
       // "Kwame · 3 messages" with the latest few lines underneath.

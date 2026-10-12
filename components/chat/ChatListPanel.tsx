@@ -15,6 +15,8 @@ import { setAppBadge } from '@/lib/badge';
 import { plainText } from '@/lib/formatting';
 import { useMyPhoto, useNicknames, usePrivacy } from '@/lib/store/account';
 import { clearUnread, markRead } from '@/lib/db/chats';
+import { useMessageSearch, type MessageHit } from '@/lib/hooks/useMessageSearch';
+import { splitMatches, normalizeForSearch } from '@/lib/search';
 import { nameFor } from '@/lib/names';
 import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
@@ -34,7 +36,7 @@ const FILTERS: { value: ListFilter; label: string }[] = [
 ];
 
 export function ChatListPanel() {
-  const { rows, loading, hasMore, loadMore } = useChatList();
+  const { rows, loading, hasMore, loadMore, hidden } = useChatList();
   const profile = useSession((state) => state.profile);
   const myPhoto = useMyPhoto(profile?.photoURL);
   const pathname = usePathname();
@@ -106,6 +108,9 @@ export function ChatListPanel() {
       ...inbox.filter((row) => !flags.pinned.has(row.id)),
     ];
   }, [rows, filter, showArchived, archivedRows, flags, listFilter, pathname, labelOf]);
+
+  // Messages, across every chat, from what this device holds (see the hook).
+  const messageSearch = useMessageSearch(filter, rows, hidden);
 
   const archivedUnread = archivedRows.filter(
     (row) => row.unread || flags.markedUnread.has(row.id),
@@ -271,6 +276,32 @@ export function ChatListPanel() {
             <Spinner />
             <span className="text-sm">Decrypting your chats</span>
           </div>
+        ) : searching ? (
+          <SearchResults
+            chats={visible.map((row) => (
+              <ChatRow
+                key={row.id}
+                row={row}
+                name={labelOf(row)}
+                photoURL={row.self ? myPhoto : row.peer?.photoURL}
+                active={pathname === `/chats/${row.id}`}
+                typing={typing.has(row.id)}
+                draft={drafts[row.id]}
+                pinned={flags.pinned.has(row.id) && !flags.archived.has(row.id)}
+                muted={flags.muted.has(row.id)}
+                marked={flags.markedUnread.has(row.id)}
+                onMenu={() => setMenuFor(row)}
+              />
+            ))}
+            hits={messageSearch.hits}
+            finding={messageSearch.searching}
+            query={filter}
+            me={myUid}
+            labelFor={(chatId) => {
+              const row = rows.find((candidate) => candidate.id === chatId);
+              return row ? { name: labelOf(row), photoURL: row.self ? myPhoto : row.peer?.photoURL } : null;
+            }}
+          />
         ) : visible.length === 0 ? (
           <EmptyState searching={searching} archive={showArchived} filter={listFilter} />
         ) : (
@@ -495,6 +526,109 @@ function ChatRow({
       </button>
     </li>
   );
+}
+
+/**
+ * What a search finds: chats by name, then messages from every chat that
+ * this device holds, newest first. The note says where the messages came
+ * from, because the server was never asked -- it could not read them anyway.
+ */
+function SearchResults({
+  chats,
+  hits,
+  finding,
+  query,
+  me,
+  labelFor,
+}: {
+  chats: React.ReactNode[];
+  hits: MessageHit[];
+  finding: boolean;
+  query: string;
+  me: string | undefined;
+  labelFor: (chatId: string) => { name: string; photoURL: string | null | undefined } | null;
+}) {
+  const wantsMessages = normalizeForSearch(query.trim()).length >= 2;
+  if (chats.length === 0 && hits.length === 0 && !finding) {
+    return (
+      <div className="flex flex-col items-center gap-2 px-8 py-16 text-center">
+        <p className="text-[15px] text-muted">
+          {wantsMessages ? 'No chats or messages match that.' : 'No chats match that.'}
+        </p>
+        {wantsMessages && (
+          <p className="text-[13px] leading-relaxed text-faint">
+            Messages are searched on this device, among the ones it has loaded before.
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="pb-24">
+      {chats.length > 0 && (
+        <>
+          <p className="px-4 pt-1 pb-1 text-[12px] font-semibold tracking-wide text-muted uppercase">Chats</p>
+          <ul>{chats}</ul>
+        </>
+      )}
+      {wantsMessages && (
+        <>
+          <p className="px-4 pt-3 pb-1 text-[12px] font-semibold tracking-wide text-muted uppercase">
+            Messages{finding ? ' · searching…' : ''}
+          </p>
+          {hits.length === 0 && !finding ? (
+            <p className="px-4 py-3 text-[13px] text-faint">No messages match that.</p>
+          ) : (
+            <ul aria-label="Messages found">
+              {hits.map((hit) => {
+                const label = labelFor(hit.chatId);
+                const mine = hit.message.senderId === me;
+                return (
+                  <li key={`${hit.chatId}:${hit.message.id}`}>
+                    <Link
+                      href={`/chats/${hit.chatId}#m-${hit.message.id}`}
+                      className="flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-surface"
+                    >
+                      <Avatar name={label?.name ?? '?'} photoURL={label?.photoURL} size={40} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-[14px] font-semibold">{label?.name ?? 'Chat'}</span>
+                          <span className="shrink-0 text-[12px] text-faint">{listTime(hit.message.createdAt)}</span>
+                        </span>
+                        <span className="line-clamp-2 text-[13px] text-muted">
+                          {mine && <span className="text-faint">You: </span>}
+                          {splitMatches(snippet(hit.message.text ?? '', query), query).map((run, index) =>
+                            run.match ? (
+                              <mark key={index} className="rounded-sm bg-zing/40 text-ink">
+                                {run.text}
+                              </mark>
+                            ) : (
+                              run.text
+                            ),
+                          )}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="px-4 pt-3 text-[12px] leading-relaxed text-faint">
+            Messages are searched on this device only, among the ones it has loaded before.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The part of a long message around the match, so the match is in view. */
+function snippet(text: string, query: string): string {
+  const flat = text.replace(/\s+/g, ' ');
+  const at = normalizeForSearch(flat).indexOf(normalizeForSearch(query.trim()));
+  if (at <= 40) return flat;
+  return '…' + flat.slice(at - 30);
 }
 
 function EmptyState({

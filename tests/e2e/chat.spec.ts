@@ -4,6 +4,7 @@
  * on a "new device" with the passphrase and then with the recovery key.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
 const PASSPHRASE = 'correct horse battery staple';
@@ -847,4 +848,65 @@ test('mark as unread, text size, translate, and replying from a notification', a
   await quin.reload();
   await quin.waitForTimeout(2000);
   await expect(rae.getByRole('main').getByText('sent from a notification')).toHaveCount(1);
+});
+
+test('send a location, search every chat, and export one', async ({ browser }) => {
+  // Sam's phone may share where it is: central Accra.
+  const samContext = await browser.newContext({
+    permissions: ['geolocation'],
+    geolocation: { latitude: 5.6037, longitude: -0.187, accuracy: 15 },
+  });
+  const sam = await samContext.newPage();
+  const tia = await newPhone(browser);
+  const samHandle = `sam_${run}`;
+  const tiaHandle = `tia_${run}`;
+
+  await signInWithGoogle(sam, samHandle);
+  await onboard(sam, samHandle);
+  await signInWithGoogle(tia, tiaHandle);
+  await onboard(tia, tiaHandle);
+
+  await sam.getByRole('link', { name: 'New chat' }).click();
+  await sam.getByLabel('Find someone').fill(`@${tiaHandle}`);
+  await sam.getByRole('button', { name: 'Find' }).click();
+  await sam.getByRole('button', { name: 'Chat', exact: true }).click();
+  await send(sam, 'hello tia');
+  await tia.locator('li').getByText(samHandle).click();
+  await send(tia, 'the pineapple party is on friday');
+  await expect(sam.getByRole('main').getByText('the pineapple party is on friday')).toBeVisible();
+
+  // A location: found, shown first, sent only on confirming.
+  await sam.getByRole('button', { name: 'Attach' }).click();
+  await sam.getByRole('button', { name: /Location/ }).click();
+  await expect(sam.getByRole('dialog')).toContainText('5.603700, -0.187000');
+  await sam.getByRole('button', { name: 'Send this location' }).click();
+  const card = tia.getByRole('main').getByRole('link', { name: /Location/ });
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('href', /5\.6037,-0\.187/);
+  await tia.goto('/chats');
+  await expect(tia.locator('li').filter({ hasText: samHandle })).toContainText('📍 Location');
+
+  // Search every chat: the message is found on this device, and opens.
+  await sam.goto('/chats');
+  await sam.getByLabel('Search your chats').fill('pineapple');
+  const found = sam.getByRole('list', { name: 'Messages found' }).getByRole('link').first();
+  await expect(found).toContainText('pineapple party');
+  await found.click();
+  await expect(sam).toHaveURL(/#m-/);
+  await expect(sam.getByRole('main').getByText('the pineapple party is on friday')).toBeVisible();
+
+  // Export: the whole chat, decrypted here, as a file.
+  await sam.getByRole('main').getByRole('button', { name: 'Chat options' }).click();
+  await sam.getByRole('button', { name: /Export chat/ }).click();
+  await expect(sam.getByRole('dialog')).toContainText('not encrypted');
+  const [file] = await Promise.all([
+    sam.waitForEvent('download'),
+    sam.getByRole('button', { name: 'Export', exact: true }).click(),
+  ]);
+  expect(file.suggestedFilename()).toMatch(new RegExp(`^Zing chat with ${tiaHandle} - .*\\.txt$`));
+  const contents = readFileSync(await file.path(), 'utf8');
+  expect(contents).toContain('You: hello tia');
+  expect(contents).toContain(`${tiaHandle}: the pineapple party is on friday`);
+  expect(contents).toContain('You: Location: 5.603700, -0.187000');
+  await samContext.close();
 });

@@ -283,5 +283,6 @@ export function useChatList() {
     if (hasMore && loaded >= max) setMax(max + CHAT_PAGE_SIZE);
   }, [hasMore, loaded, max]);
 
-  return { rows, loading, hasMore, loadMore };
+  // What I removed from each chat, so a search across chats never shows it.
+  return { rows, loading, hasMore, loadMore, hidden };
 }

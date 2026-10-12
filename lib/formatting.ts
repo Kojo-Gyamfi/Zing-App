@@ -1,5 +1,6 @@
 import { splitLinks } from './links';
 import { matchRanges } from './search';
+import { isLocation, LOCATION_LABEL } from './location';
 
 /**
  * WhatsApp-style formatting: *bold*, _italic_, ~strike~, `code` and
@@ -44,8 +45,12 @@ export function formatText(text: string, search = ''): FormattedRun[] {
   return highlight(runs, matchRanges(text, search));
 }
 
-/** The text as it reads with the markers removed, for one-line previews. */
+/**
+ * The text as it reads with the markers removed, for one-line previews. A
+ * shared location reads as "Location", never as its raw coordinates.
+ */
 export function plainText(text: string): string {
+  if (isLocation(text)) return LOCATION_LABEL;
   return formatText(text)
     .map((run) => run.text)
     .join('');

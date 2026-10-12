@@ -32,8 +32,14 @@ import { isSelfChat, peerOf } from '@/lib/chatIds';
 import { VIEW_ONCE_LABEL } from '@/lib/viewOnce';
 import { PinnedBar } from '@/components/chat/PinnedBar';
 import { ViewOnceSheet } from '@/components/chat/ViewOnceSheet';
+import { AttachSheet } from '@/components/chat/AttachSheet';
+import { coordinates, encodeLocation, parseLocation } from '@/lib/location';
+import { download, exportAsJson, exportAsText, exportFilename, type ExportFormat } from '@/lib/export';
+import { loadAllMessages, hasExpired } from '@/lib/db/messages';
+import { isHidden } from '@/lib/hidden';
 import { DeleteSelectionSheet, SelectionBar } from '@/components/chat/SelectionBar';
 import { bubbleTime } from '@/lib/format';
+import { plainText } from '@/lib/formatting';
 import { canTranslate, translateMessage, type Translation } from '@/lib/translate';
 import { setChatPref, setChatTheme, setMute, setNickname } from '@/lib/db/prefs';
 import { muteLabel } from '@/lib/mute';
@@ -68,6 +74,27 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   useEffect(() => {
     if (replying) window.history.replaceState(null, '', window.location.pathname + window.location.hash);
   }, [replying]);
+
+  const [attaching, setAttaching] = useState(false);
+
+  /**
+   * The whole chat as a file (lib/export.ts): read and decrypted here, without
+   * what I deleted for myself, cleared, or what has expired.
+   */
+  async function exportChat(format: ExportFormat, onProgress: (count: number) => void) {
+    if (!conversationKey) return false;
+    const everything = await loadAllMessages(chatId, conversationKey, {
+      after: hiddenList.clearedAt,
+      onProgress,
+    });
+    const kept = everything.filter((message) => !isHidden(message, hiddenList) && !hasExpired(message));
+    const title = selfChat ? 'Message yourself' : exportName;
+    // Plain names, not the profile: the file needs only who said what.
+    const author = (message: DecryptedMessage) => (message.senderId === user?.uid ? 'You' : exportName);
+    const file = format === 'json' ? exportAsJson(kept, author, title) : exportAsText(kept, author, title);
+    download(file, exportFilename(title, format), format === 'json' ? 'application/json' : 'text/plain');
+    return true;
+  }
 
   // Messages translated on this device, by id. Kept only while the chat is open.
   const [translations, setTranslations] = useState<Record<string, Translation>>({});
@@ -107,6 +134,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
     deleteForEveryone,
     deleteForMe,
     clearChat,
+    hiddenList,
     openViewOnce,
     pinned,
     pinnedIds,
@@ -135,6 +163,8 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   const peerName = selfChat
     ? `${profile?.displayName ?? 'Me'} (You)`
     : nameFor(peer, nicknames, peerDeleted ? 'Deleted account' : 'Loading');
+  // The other person's name as plain text, for an exported file.
+  const exportName = nameFor(peer, nicknames, peerDeleted ? 'Deleted account' : 'Them');
 
   // Opening a chat marked unread by hand takes the mark off, as on WhatsApp.
   const markedUnread = prefs.markedUnread.includes(chatId);
@@ -312,15 +342,16 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   // Arriving from the Starred screen: /chats/{id}#m-{messageId}. Once, as
   // soon as that message is on screen; one older than the loaded pages just
   // opens the chat.
+  // A message older than the loaded pages (a search hit from weeks ago) is
+  // paged back to, the way a pinned message is.
   const arrivedAt = useRef<string | null>(null);
   useEffect(() => {
     const target = window.location.hash.startsWith('#m-') ? window.location.hash.slice(3) : null;
-    if (!target || arrivedAt.current === target || !messages.some((message) => message.id === target)) {
-      return;
-    }
+    if (!target || arrivedAt.current === target || loading) return;
     arrivedAt.current = target;
-    requestAnimationFrame(() => jumpTo(target));
-  }, [messages]);
+    if (messages.some((message) => message.id === target)) requestAnimationFrame(() => jumpTo(target));
+    else requestAnimationFrame(() => setPendingJump({ id: target }));
+  }, [messages, loading]);
 
   /**
    * Step to a search hit (0 is the newest) and bring it into view. Done here,
@@ -388,9 +419,15 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
   async function copySelection(): Promise<boolean> {
     const text =
       selectedMessages.length === 1
-        ? (selectedMessages[0].text ?? '')
+        ? (() => {
+            const location = parseLocation(selectedMessages[0].text);
+            return location ? coordinates(location) : (selectedMessages[0].text ?? '');
+          })()
         : selectedMessages
-            .map((message) => `[${message.createdAt ? bubbleTime(message.createdAt) : ''}] ${authorOf(message)}: ${message.text ?? ''}`)
+            .map((message) => {
+              const location = parseLocation(message.text);
+              return `[${message.createdAt ? bubbleTime(message.createdAt) : ''}] ${authorOf(message)}: ${location ? coordinates(location) : (message.text ?? '')}`;
+            })
             .join('\n');
     try {
       await navigator.clipboard.writeText(text);
@@ -769,6 +806,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           onSend={handleSend}
           allowViewOnce={!selfChat}
           autoFocus={replying}
+          onAttach={() => setAttaching(true)}
           onTyping={ping}
           disabled={peerDeleted || blockedByPeer || unavailable || !conversationKey || !chatKnown}
           disabledText={
@@ -831,7 +869,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
       {forwardMessage?.text && !forwardMessage.deleted && user && (
         <ForwardSheet
           me={user.uid}
-          preview={forwardMessage.text}
+          preview={plainText(forwardMessage.text)}
           onClose={() => setForwarding(null)}
           onPick={async (target) => {
             const ok = await forward(forwardMessage.text!, target);
@@ -869,7 +907,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
           preview={
             forwardingMany.length === 1
               ? (forwardingMany[0].text ?? '')
-              : `${forwardingMany.length} messages: ${forwardingMany.map((message) => message.text).join(' · ')}`
+              : `${forwardingMany.length} messages: ${forwardingMany.map((message) => plainText(message.text ?? '')).join(' · ')}`
           }
           onClose={() => setForwardingMany(null)}
           onPick={async (target) => {
@@ -883,6 +921,18 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             if (target !== chatId) router.push(`/chats/${target}`);
             return true;
           }}
+        />
+      )}
+
+      {attaching && (
+        <AttachSheet
+          onSendLocation={(location) => {
+            atBottom.current = true;
+            const reply = composerContext?.kind === 'reply' ? composerContext.id : null;
+            if (reply) setComposerContext(null);
+            void sendText(encodeLocation(location), reply);
+          }}
+          onClose={() => setAttaching(false)}
         />
       )}
 
@@ -942,6 +992,7 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
             clearChat();
             setComposerContext(null);
           }}
+          onExport={conversationKey ? exportChat : undefined}
           onCloseChat={() => router.push('/chats')}
           onClose={() => setChatMenuOpen(false)}
         />

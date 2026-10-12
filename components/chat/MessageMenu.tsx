@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { EDIT_WINDOW_MS, type DecryptedMessage } from '@/lib/db/schema';
 import { QUICK_REACTIONS } from '@/lib/reactions';
 import { EmojiPanel } from './EmojiPanel';
+import { coordinates, isLocation, parseLocation } from '@/lib/location';
 
 /**
  * Long-press / right-click actions for one message.
@@ -82,6 +83,8 @@ export function MessageMenu({
       mine &&
       !message.deleted &&
       !message.viewOnce &&
+      // A location is sent as it is; editing would mean typing coordinates.
+      !isLocation(message.text) &&
       message.text !== null &&
       !message.pending &&
       message.createdAt !== null &&
@@ -91,7 +94,8 @@ export function MessageMenu({
   const canDeleteForEveryone = mine && !message.deleted;
   // A view-once message's text is never copied, forwarded, starred or shown
   // here: it is meant to be seen once, in its own viewer.
-  const text = message.viewOnce ? null : message.text;
+  const location = parseLocation(message.text);
+  const text = message.viewOnce ? null : location ? coordinates(location) : message.text;
 
   async function copy() {
     if (text === null) return;
@@ -212,7 +216,7 @@ export function MessageMenu({
                 }}
               />
             )}
-            {onTranslate && text !== null && !message.deleted && (
+            {onTranslate && text !== null && !location && !message.deleted && (
               <Action
                 label="Translate"
                 icon="M4 5h8M8 3v2M5.5 5c0 4 3 7 6.5 8.5M10.5 5c-.5 3.5-3 6.5-6.5 8M13 21l4-9 4 9M14.5 18h5"
