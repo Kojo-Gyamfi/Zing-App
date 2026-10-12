@@ -95,3 +95,26 @@ export function exportFilename(title: string, format: ExportFormat): string {
   const safe = title.replace(/[\\/:*?"<>|]+/g, '').trim() || 'chat';
   return `Zing chat with ${safe} - ${new Date().toISOString().slice(0, 10)}.${format}`;
 }
+
+// The last chat collected for export, decrypted, in memory only. Exporting it
+// again soon after (the other format, a second tap) reuses it instead of
+// reading every message from the server again: an export of a long chat is
+// thousands of billed reads. One chat at a time, and dropped at sign-out.
+const REUSE_MS = 2 * 60_000;
+let lastCollected: { key: string; at: number; messages: DecryptedMessage[] } | null = null;
+
+/** The messages to export: the copy from the last two minutes, or `load()`'s. */
+export async function collectForExport(
+  key: string,
+  load: () => Promise<DecryptedMessage[]>,
+): Promise<DecryptedMessage[]> {
+  if (lastCollected?.key === key && Date.now() - lastCollected.at < REUSE_MS) return lastCollected.messages;
+  lastCollected = null;
+  const messages = await load();
+  lastCollected = { key, at: Date.now(), messages };
+  return messages;
+}
+
+export function forgetExports(): void {
+  lastCollected = null;
+}

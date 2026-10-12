@@ -15,6 +15,7 @@ import { useProfiles } from '@/lib/store/profiles';
 import { watchAccount } from '@/lib/store/account';
 import { clearDrafts } from '@/lib/store/drafts';
 import { clearDictionaries } from '@/lib/proofread';
+import { forgetExports } from '@/lib/export';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -160,6 +161,7 @@ export const useSession = create<SessionState>((set, get) => ({
         // out must not leave them behind in a tab that stays open.
         useKeys.getState().clear();
         useProfiles.getState().reset();
+        forgetExports();
         // Signed out from elsewhere -- the session revoked, the account
         // deleted on another device -- rather than with the button: wipe what
         // the button would have, or the next person on this phone finds the

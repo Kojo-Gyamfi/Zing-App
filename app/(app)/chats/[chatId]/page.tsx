@@ -34,7 +34,7 @@ import { PinnedBar } from '@/components/chat/PinnedBar';
 import { ViewOnceSheet } from '@/components/chat/ViewOnceSheet';
 import { AttachSheet } from '@/components/chat/AttachSheet';
 import { coordinates, encodeLocation, parseLocation } from '@/lib/location';
-import { download, exportAsJson, exportAsText, exportFilename, type ExportFormat } from '@/lib/export';
+import { collectForExport, download, exportAsJson, exportAsText, exportFilename, type ExportFormat } from '@/lib/export';
 import { loadAllMessages, hasExpired } from '@/lib/db/messages';
 import { isHidden } from '@/lib/hidden';
 import { DeleteSelectionSheet, SelectionBar } from '@/components/chat/SelectionBar';
@@ -83,10 +83,9 @@ export default function ThreadPage({ params }: { params: Promise<{ chatId: strin
    */
   async function exportChat(format: ExportFormat, onProgress: (count: number) => void) {
     if (!conversationKey) return false;
-    const everything = await loadAllMessages(chatId, conversationKey, {
-      after: hiddenList.clearedAt,
-      onProgress,
-    });
+    const everything = await collectForExport(`${user?.uid}:${chatId}`, () =>
+      loadAllMessages(chatId, conversationKey, { after: hiddenList.clearedAt, onProgress }),
+    );
     const kept = everything.filter((message) => !isHidden(message, hiddenList) && !hasExpired(message));
     const title = selfChat ? 'Message yourself' : exportName;
     // Plain names, not the profile: the file needs only who said what.

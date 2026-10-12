@@ -948,3 +948,38 @@ test('searching for an emoji, in the composer and for a reaction', async ({ brow
   await actions.getByRole('region', { name: 'Emoji found' }).getByRole('button', { name: /flag: ghana/i }).click();
   await expect(ola.getByRole('main').getByRole('button', { name: /^Reactions: 🇬🇭 1/ })).toBeVisible();
 });
+
+test('an account with no recovery key is asked to make one', async ({ browser }) => {
+  const pia = await newPhone(browser);
+  const piaHandle = `pia_${run}`;
+  await signInWithGoogle(pia, piaHandle);
+  await onboard(pia, piaHandle);
+
+  // New accounts make a recovery key at sign-up, so they are never asked.
+  await expect(pia.getByText('Make a recovery key')).toHaveCount(0);
+
+  // An account from before recovery keys existed: no recovery doc.
+  await pia.getByRole('link', { name: 'New chat' }).click();
+  await pia.getByRole('button', { name: /Message yourself/ }).click();
+  await expect(pia).toHaveURL(/\/chats\/([A-Za-z0-9]+)_\1$/);
+  const uid = new URL(pia.url()).pathname.split('/').pop()!.split('_')[0];
+  const removed = await fetch(
+    `http://127.0.0.1:8080/v1/projects/demo-zing/databases/(default)/documents/users/${uid}/private/recovery`,
+    { method: 'DELETE', headers: { Authorization: 'Bearer owner' } },
+  );
+  expect(removed.ok).toBe(true);
+
+  await pia.goto('/chats');
+  await expect(pia.getByText('Make a recovery key')).toBeVisible();
+  await pia.getByRole('link', { name: 'Make one' }).click();
+  await expect(pia).toHaveURL(/\/settings#security$/);
+  await expect(pia.getByText('You have no recovery key.', { exact: false })).toBeVisible();
+
+  // "Later" puts it away for a week, on this device.
+  await pia.goto('/chats');
+  await pia.getByRole('button', { name: 'Later' }).click();
+  await expect(pia.getByText('Make a recovery key')).toHaveCount(0);
+  await pia.reload();
+  await expect(pia.getByRole('link', { name: 'New chat' })).toBeVisible();
+  await expect(pia.getByText('Make a recovery key')).toHaveCount(0);
+});

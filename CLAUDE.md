@@ -235,7 +235,13 @@ rather than letting every decryption fail mysteriously.
   messages are left out. A hit opens `/chats/<id>#m-<msgId>`, which pages back if it has to.
 - **Export builds the file on the device** (`lib/export.ts`, with `loadAllMessages` paging the
   whole chat from the server as ciphertext). The file is unencrypted, and the sheet says so. It
-  never contains a view-once text, and it respects "Delete for me", clear chat and expiry.
+  never contains a view-once text, and it respects "Delete for me", clear chat and expiry. A long
+  chat is thousands of billed reads, so `collectForExport` reuses the last collected chat for two
+  minutes (one chat, in memory, dropped at sign-out).
+- **The device key is guarded on two fronts** (`components/KeySafety.tsx`). `KeepStorage` asks the
+  browser on each launch not to evict storage (`navigator.storage.persist()`), except in Firefox,
+  which prompts; there it's the button in Settings → Storage. `RecoveryPrompt` asks accounts made
+  before recovery keys existed to make one (one read per session; "Later" snoozes a week).
 - **Emoji search runs on the device** (`lib/emojiSearch.ts`) over `components/chat/emojiKeywords.ts`,
   generated from emojibase-data (Unicode CLDR names and tags) by `scripts/gen-emoji-keywords.mjs`
   for exactly the emoji in `emojiData.ts`. Re-run the script after changing the picker. The words
