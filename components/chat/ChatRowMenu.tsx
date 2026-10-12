@@ -17,11 +17,13 @@ export function ChatRowMenu({
   muteStatus,
   archived,
   favourite,
+  unread,
   pinnedCount,
   onPin,
   onMute,
   onArchive,
   onFavourite,
+  onMarkUnread,
   onClose,
 }: {
   name: string;
@@ -30,11 +32,14 @@ export function ChatRowMenu({
   muteStatus: string | null;
   archived: boolean;
   favourite: boolean;
+  /** Waiting to be read, or marked unread by hand. */
+  unread: boolean;
   pinnedCount: number;
   onPin: (on: boolean) => void;
   onMute: (duration: MuteDuration | null) => void;
   onArchive: (on: boolean) => void;
   onFavourite: (on: boolean) => void;
+  onMarkUnread: (unread: boolean) => void;
   onClose: () => void;
 }) {
   const [muting, setMuting] = useState(false);
@@ -71,6 +76,15 @@ export function ChatRowMenu({
             }}
           />
         )}
+        <SheetItem
+          label={unread ? 'Mark as read' : 'Mark as unread'}
+          hint={unread ? undefined : 'Keeps it marked until you open it again. Only you see this.'}
+          icon="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM17 7.5h.01"
+          onClick={() => {
+            onMarkUnread(!unread);
+            onClose();
+          }}
+        />
         <SheetItem
           label={favourite ? 'Remove from favourites' : 'Add to favourites'}
           hint={favourite ? undefined : 'Shows it under the Favourites filter.'}

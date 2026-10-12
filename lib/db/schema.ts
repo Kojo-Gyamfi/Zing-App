@@ -49,6 +49,11 @@ export type AccountDoc = {
   archived?: string[];
   /** Chat ids under the "Favourites" filter of the chat list. */
   favourites?: string[];
+  /**
+   * Chat ids marked unread by hand, to come back to. Only a mark on my side:
+   * nobody's receipts change. Opening the chat clears it.
+   */
+  markedUnread?: string[];
   /** Theme and wallpaper, so they follow the user to a new phone. */
   appearance?: Partial<Appearance>;
   /** Per-chat wallpaper and bubble colour, overriding `appearance`. */

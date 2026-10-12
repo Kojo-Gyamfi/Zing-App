@@ -14,6 +14,7 @@ export function AppearanceSync() {
   const ready = useAccount((state) => state.owner !== null && state.known);
   const theme = useAccount((state) => state.settings.appearance.theme);
   const wallpaper = useAccount((state) => state.settings.appearance.wallpaper);
+  const textSize = useAccount((state) => state.settings.appearance.textSize);
 
   // Strict Mode's dev remount resets <html> to the attributes React renders,
   // dropping the ones the inline script set. A no-op in production.
@@ -21,7 +22,7 @@ export function AppearanceSync() {
 
   useEffect(() => {
     if (!ready) return;
-    const appearance = { theme, wallpaper };
+    const appearance = { theme, wallpaper, textSize };
     applyAppearance(appearance);
     if (theme !== 'system') return;
     // "System" follows the phone switching to dark mode at sunset.
@@ -29,7 +30,7 @@ export function AppearanceSync() {
     const follow = () => applyAppearance(appearance);
     query.addEventListener('change', follow);
     return () => query.removeEventListener('change', follow);
-  }, [ready, theme, wallpaper]);
+  }, [ready, theme, wallpaper, textSize]);
 
   return null;
 }

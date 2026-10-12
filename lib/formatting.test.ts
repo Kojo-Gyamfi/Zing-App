@@ -94,7 +94,13 @@ describe('appearance', () => {
     expect(toAppearance({ theme: 'neon', wallpaper: 'ocean' })).toEqual({
       theme: DEFAULT_APPEARANCE.theme,
       wallpaper: 'ocean',
+      textSize: 'default',
     });
     expect(toAppearance('junk')).toEqual(DEFAULT_APPEARANCE);
+  });
+
+  it('keeps a known text size and drops anything else', () => {
+    expect(toAppearance({ textSize: 'xlarge' }).textSize).toBe('xlarge');
+    expect(toAppearance({ textSize: 'huge' }).textSize).toBe('default');
   });
 });

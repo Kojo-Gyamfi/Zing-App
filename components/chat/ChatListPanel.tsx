@@ -13,7 +13,8 @@ import { useMuteClock } from '@/lib/hooks/useMuteClock';
 import { listTime } from '@/lib/format';
 import { setAppBadge } from '@/lib/badge';
 import { plainText } from '@/lib/formatting';
-import { useMyPhoto, useNicknames } from '@/lib/store/account';
+import { useMyPhoto, useNicknames, usePrivacy } from '@/lib/store/account';
+import { clearUnread, markRead } from '@/lib/db/chats';
 import { nameFor } from '@/lib/names';
 import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
@@ -54,6 +55,7 @@ export function ChatListPanel() {
     [myName, nicknames],
   );
   const prefs = useChatPrefs(myUid);
+  const privacy = usePrivacy();
   const typing = useTypingChats(
     myUid,
     useMemo(() => rows.filter((row) => !row.peerDeleted).map((row) => row.id), [rows]),
@@ -67,6 +69,7 @@ export function ChatListPanel() {
       muted: { has: (chatId: string) => isMuted(prefs, chatId, now) },
       archived: new Set(prefs.archived),
       favourites: new Set(prefs.favourites),
+      markedUnread: new Set(prefs.markedUnread),
     }),
     [prefs, now],
   );
@@ -93,7 +96,9 @@ export function ChatListPanel() {
       if (listFilter === 'favourites') return flags.favourites.has(row.id);
       // The open chat stays under Unread after reading it clears the badge,
       // as on WhatsApp -- otherwise it would vanish from beside the thread.
-      if (listFilter === 'unread') return row.unread || pathname === `/chats/${row.id}`;
+      if (listFilter === 'unread') {
+        return row.unread || flags.markedUnread.has(row.id) || pathname === `/chats/${row.id}`;
+      }
       return true;
     });
     return [
@@ -102,7 +107,24 @@ export function ChatListPanel() {
     ];
   }, [rows, filter, showArchived, archivedRows, flags, listFilter, pathname, labelOf]);
 
-  const archivedUnread = archivedRows.filter((row) => row.unread).length;
+  const archivedUnread = archivedRows.filter(
+    (row) => row.unread || flags.markedUnread.has(row.id),
+  ).length;
+
+  /**
+   * "Mark as unread" puts a mark on my side only. "Mark as read" takes the
+   * mark off and, for messages really waiting, reads them -- a read receipt
+   * only if I share those (the privacy setting), the badge either way.
+   */
+  function markUnread(row: ChatListRow, on: boolean) {
+    if (!myUid) return;
+    toggle('markedUnread', row.id, on);
+    if (!on && row.unread) {
+      void (privacy.readReceipts ? markRead(row.id, myUid) : clearUnread(row.id, myUid)).catch(
+        () => undefined,
+      );
+    }
+  }
 
   // Searching, Archived and the filters look at loaded chats only, and the
   // next page loads on scroll -- which a short result list never does. Load
@@ -264,6 +286,7 @@ export function ChatListPanel() {
                 draft={drafts[row.id]}
                 pinned={flags.pinned.has(row.id) && !flags.archived.has(row.id)}
                 muted={flags.muted.has(row.id)}
+                marked={flags.markedUnread.has(row.id)}
                 onMenu={() => setMenuFor(row)}
               />
             ))}
@@ -293,6 +316,7 @@ export function ChatListPanel() {
           muteStatus={muteLabel(prefs, menuFor.id, now)}
           archived={flags.archived.has(menuFor.id)}
           favourite={flags.favourites.has(menuFor.id)}
+          unread={menuFor.unread || flags.markedUnread.has(menuFor.id)}
           // From the prefs, not the loaded rows: a quiet pinned chat past the
           // first page still holds one of the slots.
           pinnedCount={prefs.pinned.filter((id) => !flags.archived.has(id)).length}
@@ -302,6 +326,7 @@ export function ChatListPanel() {
           }}
           onArchive={(on) => toggle('archived', menuFor.id, on)}
           onFavourite={(on) => toggle('favourites', menuFor.id, on)}
+          onMarkUnread={(on) => markUnread(menuFor, on)}
           onClose={() => setMenuFor(null)}
         />
       )}
@@ -322,6 +347,7 @@ function ChatRow({
   draft,
   pinned,
   muted,
+  marked,
   onMenu,
 }: {
   row: ChatListRow;
@@ -334,6 +360,8 @@ function ChatRow({
   draft?: string;
   pinned: boolean;
   muted: boolean;
+  /** Marked unread by hand: a dot, with no count. */
+  marked: boolean;
   onMenu: () => void;
 }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -388,7 +416,7 @@ function ChatRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <span className="truncate font-semibold">{name}</span>
-            <span className={`shrink-0 text-[12px] ${row.unread && !muted ? 'text-zing' : 'text-faint'}`}>
+            <span className={`shrink-0 text-[12px] ${(row.unread || marked) && !muted ? 'text-zing' : 'text-faint'}`}>
               {listTime(row.updatedAt)}
             </span>
           </div>
@@ -442,6 +470,13 @@ function ChatRow({
                 >
                   {row.unreadCount > 99 ? '99+' : row.unreadCount}
                 </span>
+              )}
+              {marked && !row.unread && (
+                <span
+                  role="img"
+                  aria-label="Marked unread"
+                  className={`size-3 rounded-full ${muted ? 'bg-faint' : 'bg-zing'}`}
+                />
               )}
             </span>
           </div>

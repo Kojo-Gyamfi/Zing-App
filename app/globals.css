@@ -172,6 +172,24 @@ input:-webkit-autofill {
   --wallpaper-image: url('/chat-doodles-sand.svg');
 }
 
+/* Message text size (lib/appearance.ts TEXT_SIZES), set on <html>. The box
+   you type in never goes under 16px: iOS zooms the page into a smaller one. */
+:root {
+  --chat-text: 15px;
+}
+[data-text-size='small'] {
+  --chat-text: 13px;
+}
+[data-text-size='large'] {
+  --chat-text: 17.5px;
+}
+[data-text-size='xlarge'] {
+  --chat-text: 20px;
+}
+:root {
+  --composer-text: max(16px, var(--chat-text));
+}
+
 /* One chat's outgoing-bubble colour (lib/appearance.ts BUBBLES), set on the
    thread. Mixed into the incoming bubble, so it is a deep shade in dark mode
    and a pale one in light, and the ink keeps its contrast in both. Teal is

@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useSession } from '@/lib/store/session';
 import { AppearanceSync } from '@/components/AppearanceSync';
 import { NicknameCache } from '@/components/NicknameCache';
+import { OutboxSender } from '@/components/OutboxSender';
 
 /** Starts the single auth + identity listener for the whole app. */
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -15,6 +16,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <>
       <AppearanceSync />
       <NicknameCache />
+      <OutboxSender />
       {children}
     </>
   );

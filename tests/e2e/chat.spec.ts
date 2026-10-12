@@ -754,3 +754,97 @@ test('spelling and grammar, checked on the device as you type', async ({ browser
   await olga.waitForTimeout(1500);
   await expect(olga.locator('mark', { hasText: 'teh' })).toHaveCount(0);
 });
+
+test('mark as unread, text size, translate, and replying from a notification', async ({ browser }) => {
+  const quin = await newPhone(browser);
+  const rae = await newPhone(browser);
+  const quinHandle = `quin_${run}`;
+  const raeHandle = `rae_${run}`;
+
+  // Headless Chromium has no on-device translator: stand-ins for its APIs,
+  // so the app's side of it can be tested.
+  await quin.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>;
+    scope.LanguageDetector = {
+      availability: async () => 'available',
+      create: async () => ({ detect: async () => [{ detectedLanguage: 'fr', confidence: 0.95 }] }),
+    };
+    scope.Translator = {
+      availability: async () => 'available',
+      create: async () => ({ translate: async () => 'Hello my friend' }),
+    };
+  });
+
+  await signInWithGoogle(quin, quinHandle);
+  await onboard(quin, quinHandle);
+  await signInWithGoogle(rae, raeHandle);
+  await onboard(rae, raeHandle);
+
+  await quin.getByRole('link', { name: 'New chat' }).click();
+  await quin.getByLabel('Find someone').fill(`@${raeHandle}`);
+  await quin.getByRole('button', { name: 'Find' }).click();
+  await quin.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(quin).toHaveURL(/\/chats\/.+_.+/);
+  const chatId = new URL(quin.url()).pathname.split('/').pop()!;
+  await send(quin, 'hi');
+  await rae.locator('li').getByText(quinHandle).click();
+  await send(rae, 'Bonjour mon ami');
+  const thread = quin.getByRole('main');
+  await expect(thread.getByText('Bonjour mon ami')).toBeVisible();
+
+  // Translate, on the device: the original stays, the translation under it.
+  await openMenu(quin, 'Bonjour mon ami');
+  await quin.getByRole('button', { name: 'Translate' }).click();
+  await expect(thread.getByText('Hello my friend')).toBeVisible();
+  await expect(thread.getByText('Translated from French')).toBeVisible();
+  await thread.getByRole('button', { name: 'Hide' }).click();
+  await expect(thread.getByText('Hello my friend')).toHaveCount(0);
+
+  // Text size: bigger message text, everywhere at once.
+  await quin.goto('/settings#appearance');
+  await quin.getByRole('radio', { name: 'Large', exact: true }).click();
+  await expect(quin.locator('html')).toHaveAttribute('data-text-size', 'large');
+  await quin.goto(`/chats/${chatId}`);
+  const bubble = quin.locator('section').getByText('Bonjour mon ami', { exact: true });
+  await expect(bubble).toBeVisible();
+  expect(await bubble.evaluate((node) => getComputedStyle(node).fontSize)).toBe('17.5px');
+
+  // Mark as unread: a dot in the list, under Unread, gone once it is opened.
+  await quin.goto('/chats');
+  const row = quin.locator('li').filter({ hasText: raeHandle });
+  await row.getByRole('link').dispatchEvent('contextmenu');
+  await quin.getByRole('button', { name: /Mark as unread/ }).click();
+  await expect(row.getByRole('img', { name: 'Marked unread' })).toBeVisible();
+  await quin.getByRole('radio', { name: 'Unread' }).click();
+  await expect(row).toBeVisible();
+  await row.getByRole('link').click();
+  await expect(quin).toHaveURL(new RegExp(`/chats/${chatId}$`));
+  await quin.goto('/chats');
+  await expect(quin.locator('li').filter({ hasText: raeHandle }).getByRole('img', { name: 'Marked unread' })).toHaveCount(0);
+
+  // A reply typed into a notification: the service worker queues it on the
+  // device, exactly like this; the app sends it, sealed, once it is running.
+  await quin.evaluate(
+    (id) =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('zing');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const tx = open.result.transaction('outbox', 'readwrite');
+          tx.objectStore('outbox').put({ chatId: id, text: 'sent from a notification', at: Date.now() }, 'test-reply');
+          tx.oncomplete = () => {
+            open.result.close();
+            resolve();
+          };
+          tx.onerror = () => reject(tx.error);
+        };
+      }),
+    chatId,
+  );
+  await quin.reload();
+  await expect(rae.getByRole('main').getByText('sent from a notification')).toBeVisible();
+  // Sent once, and the queue is empty again.
+  await quin.reload();
+  await quin.waitForTimeout(2000);
+  await expect(rae.getByRole('main').getByText('sent from a notification')).toHaveCount(1);
+});

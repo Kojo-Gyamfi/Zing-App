@@ -57,6 +57,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       lang="en"
       data-theme="dark"
       data-wallpaper={DEFAULT_APPEARANCE.wallpaper}
+      data-text-size={DEFAULT_APPEARANCE.textSize}
       className={`${sans.variable} ${mono.variable} h-full`}
       suppressHydrationWarning
     >

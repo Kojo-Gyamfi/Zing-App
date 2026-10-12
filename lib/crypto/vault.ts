@@ -20,12 +20,15 @@ import type { Identity } from './types';
  */
 
 const DB_NAME = 'zing';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE = 'identity';
 const RECORD = 'privateKey';
 const KEYS_STORE = 'chatKeys';
 // Nicknames, for the service worker's notification titles (see saveNicknames).
 const NAMES_STORE = 'names';
+// Replies typed into a notification, waiting for the app to send them. The
+// service worker writes here; the app takes them out (takeOutbox).
+const OUTBOX_STORE = 'outbox';
 const NICKNAMES = 'nicknames';
 
 let db: Promise<IDBPDatabase> | null = null;
@@ -42,6 +45,9 @@ function database() {
         }
         if (!instance.objectStoreNames.contains(NAMES_STORE)) {
           instance.createObjectStore(NAMES_STORE);
+        }
+        if (!instance.objectStoreNames.contains(OUTBOX_STORE)) {
+          instance.createObjectStore(OUTBOX_STORE);
         }
       },
       // A newer version of the app opened in another tab wants to upgrade:
@@ -91,6 +97,7 @@ export async function clearIdentity(): Promise<void> {
     instance.delete(STORE, RECORD),
     instance.clear(KEYS_STORE),
     instance.clear(NAMES_STORE),
+    instance.clear(OUTBOX_STORE),
   ]);
 }
 
@@ -102,6 +109,27 @@ export async function clearIdentity(): Promise<void> {
 export async function saveNicknames(nicknames: Record<string, string>): Promise<void> {
   const instance = await database();
   await instance.put(NAMES_STORE, nicknames, NICKNAMES);
+}
+
+/** A reply from a notification: plaintext, on this device only, until sent. */
+export type QueuedReply = { chatId: string; text: string; at: number };
+
+/**
+ * Every reply waiting to go, removed in the same transaction that reads it --
+ * so two tabs taking at once can never both send the same one.
+ */
+export async function takeOutbox(): Promise<QueuedReply[]> {
+  const instance = await database();
+  const tx = instance.transaction(OUTBOX_STORE, 'readwrite');
+  const items = (await tx.store.getAll()) as unknown[];
+  await tx.store.clear();
+  await tx.done;
+  return items.filter(
+    (item): item is QueuedReply =>
+      !!item &&
+      typeof (item as QueuedReply).chatId === 'string' &&
+      typeof (item as QueuedReply).text === 'string',
+  );
 }
 
 /**

@@ -144,6 +144,39 @@ function readRecord(store, key) {
 }
 
 /**
+ * Write one record into the app's IndexedDB: the only write this worker
+ * makes, a reply typed into a notification waiting for the app to send it.
+ * False when the app has not created that store yet (an older version).
+ */
+function writeRecord(store, key, value) {
+  return new Promise((resolve) => {
+    const open = indexedDB.open('zing');
+    open.onupgradeneeded = () => open.transaction?.abort();
+    open.onerror = () => resolve(false);
+    open.onsuccess = () => {
+      const database = open.result;
+      const done = (ok) => {
+        database.close();
+        resolve(ok);
+      };
+      if (!database.objectStoreNames.contains(store)) {
+        done(false);
+        return;
+      }
+      try {
+        const tx = database.transaction(store, 'readwrite');
+        tx.objectStore(store).put(value, key);
+        tx.oncomplete = () => done(true);
+        tx.onerror = () => done(false);
+        tx.onabort = () => done(false);
+      } catch {
+        done(false);
+      }
+    };
+  });
+}
+
+/**
  * Returns the plaintext, or null if this device cannot open it -- in which
  * case the caller falls back to a contentless notification rather than
  * showing nothing at all.
@@ -233,6 +266,11 @@ self.addEventListener('push', (event) => {
         renotify: true,       // buzz again for each new message, not just the first
         timestamp: Date.now(),
         data: { chatId, count, lines },
+        // Reply right from the notification (Android and desktop Chrome). The
+        // text goes to the app, which encrypts and sends it as always: this
+        // worker never signs in or writes to the database. Browsers without
+        // inline replies show a button that opens the chat instead.
+        actions: [{ action: 'reply', type: 'text', title: 'Reply', placeholder: 'Reply…' }],
       });
 
       // The app icon's badge while the app is closed: messages waiting in
@@ -248,19 +286,38 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const target = `/chats/${event.notification.data?.chatId ?? ''}`;
+  const chatId = event.notification.data?.chatId ?? '';
+  const target = `/chats/${chatId}`;
+  const reply = event.action === 'reply' && typeof event.reply === 'string' ? event.reply.trim() : '';
 
   event.waitUntil(
     (async () => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+      // A reply typed into the notification: queued on this device for the
+      // app, which sends it encrypted. An open tab is nudged to send it now,
+      // in the background; with none open, the chat opens and sends it.
+      if (reply && chatId) {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const queued = await writeRecord('outbox', id, { chatId, text: reply.slice(0, 4000), at: Date.now() });
+        if (queued) {
+          for (const client of clients) client.postMessage({ type: 'zing-outbox' });
+          if (clients.length) return;
+          return self.clients.openWindow(target);
+        }
+      }
+
+      // "Reply" where the browser has no text box in notifications: the chat,
+      // keyboard up.
+      const destination = event.action === 'reply' ? `${target}?reply=1` : target;
       // navigate() only works on a window this worker controls; for any
       // other, it rejects and the tap would just focus the wrong page.
       for (const client of clients) {
         if (!('navigate' in client)) continue;
-        const navigated = await client.navigate(target).catch(() => null);
+        const navigated = await client.navigate(destination).catch(() => null);
         if (navigated) return navigated.focus();
       }
-      return self.clients.openWindow(target);
+      return self.clients.openWindow(destination);
     })(),
   );
 });
