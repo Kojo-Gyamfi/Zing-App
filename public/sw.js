@@ -207,7 +207,10 @@ self.addEventListener('push', (event) => {
 
       // Null when this device cannot open it, or when the message was too long
       // to fit in a push and was sent without its ciphertext.
-      const text = ciphertext && nonce ? await decryptPreview(chatId, ciphertext, nonce) : null;
+      // Previews switched off in Settings on this device: never decrypt them.
+      const previews = (await readRecord('names', 'notificationPreviews')) !== false;
+      const text =
+        previews && ciphertext && nonce ? await decryptPreview(chatId, ciphertext, nonce) : null;
       // A view-once message arrives with no ciphertext at all; say what it is.
       const line = viewOnce === '1' ? 'View once message' : (text ?? 'New message');
 

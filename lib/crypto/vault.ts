@@ -105,6 +105,23 @@ export async function saveNicknames(nicknames: Record<string, string>): Promise<
 }
 
 /**
+ * Whether notifications on this device show what the message says, or only
+ * "New message" -- for a lock screen other people see. The service worker
+ * reads it; it is a setting of this device, not the account.
+ */
+const PREVIEWS = 'notificationPreviews';
+
+export async function saveNotificationPreviews(on: boolean): Promise<void> {
+  const instance = await database();
+  await instance.put(NAMES_STORE, on, PREVIEWS);
+}
+
+export async function loadNotificationPreviews(): Promise<boolean> {
+  const instance = await database();
+  return (await instance.get(NAMES_STORE, PREVIEWS)) !== false;
+}
+
+/**
  * Sealed conversation keys, cached for the service worker.
  *
  * The worker has to decrypt notification previews while the app is closed, and

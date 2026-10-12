@@ -9,52 +9,64 @@ import type { UserDoc } from '@/lib/db/schema';
 /**
  * Your own profile link, as a QR code and through the share sheet -- the same
  * link the profile sheet shares for other people. It carries only the
- * @username, which is public already.
+ * @username, which is public already. Scanning someone else's code is right
+ * beside it, the way people swap codes in person.
  */
-export function ShareProfileCard({ profile }: { profile: UserDoc }) {
-  // Built on demand: the origin is only known in the browser.
-  const [link, setLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+export function ShareProfileCard({ profile, onScan }: { profile: UserDoc; onScan: () => void }) {
+  // Settings renders only once the profile has loaded in the browser, so the
+  // origin is always there to build the link from.
+  const link = profileLink(profile.username);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  function flash(text: string) {
+    setNotice(text);
+    setTimeout(() => setNotice(null), 2000);
+  }
 
   async function share() {
-    if ((await shareProfile(profile)) === 'copied') {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+    if ((await shareProfile(profile)) === 'copied') flash('Link copied');
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link);
+      flash('Link copied');
+    } catch {
+      flash('Could not copy');
     }
   }
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">
-        Share your profile
-      </h2>
+    <div className="space-y-4 rounded-2xl border border-line bg-surface p-4">
+      <p className="text-[12px] leading-relaxed text-faint">
+        Anyone who scans the code or opens the link can start a chat with you. They see your name,
+        @username, about and photo (if you share it) — never your phone number.
+      </p>
 
-      <div className="space-y-4 rounded-2xl border border-line bg-surface p-4">
-        <p className="text-[12px] leading-relaxed text-faint">
-          Anyone who scans the code or opens the link can start a chat with you. They see your
-          name, @username, about and photo (if you share it) — never your phone number.
-        </p>
-
-        {link && (
-          <div className="flex flex-col items-center gap-2">
-            <ProfileQr url={link} size={208} />
-            <p className="text-center text-[12px] break-all text-muted">{link}</p>
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            onClick={() => setLink(link ? null : profileLink(profile.username))}
-            className="flex-1"
-          >
-            {link ? 'Hide QR code' : 'Show QR code'}
-          </Button>
-          <Button onClick={() => void share()} className="flex-1">
-            {copied ? 'Link copied' : 'Share link'}
-          </Button>
-        </div>
+      <div className="flex flex-col items-center gap-2">
+        <ProfileQr url={link} size={208} />
+        <button
+          onClick={() => void copy()}
+          aria-label="Copy profile link"
+          className="text-center text-[12px] break-all text-muted underline-offset-2 hover:underline"
+        >
+          {link}
+        </button>
       </div>
-    </section>
+
+      <div className="flex gap-2">
+        <Button variant="ghost" onClick={onScan} className="flex-1">
+          Scan a code
+        </Button>
+        <Button onClick={() => void share()} className="flex-1">
+          Share link
+        </Button>
+      </div>
+      {notice && (
+        <p role="status" className="text-center text-[12px] text-zing">
+          {notice}
+        </p>
+      )}
+    </div>
   );
 }

@@ -141,8 +141,7 @@ export function ViewOnceSheet({
 
         <p className="text-[12px] leading-relaxed text-faint">
           It shows only while you hold it, and closes for good if you leave Zing or try a screenshot
-          shortcut. No app can fully stop a screenshot or another phone’s camera, so your @handle is
-          on it.
+          shortcut.
         </p>
         <button
           onClick={onClose}

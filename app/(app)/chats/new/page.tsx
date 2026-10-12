@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import type { UserDoc } from '@/lib/db/schema';
 import { useMyPhoto } from '@/lib/store/account';
+import { QrScanner } from '@/components/QrScanner';
 
 export default function NewChatPage() {
   const router = useRouter();
@@ -23,6 +24,7 @@ export default function NewChatPage() {
   const [searching, setSearching] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   async function search() {
     const query = term.trim();
@@ -103,6 +105,24 @@ export default function NewChatPage() {
           </Button>
         </div>
 
+        <button
+          onClick={() => setScanning(true)}
+          className="flex w-full items-center gap-3 rounded-2xl border border-line bg-surface p-3 text-left
+            transition-colors hover:bg-elevated"
+        >
+          <span className="grid size-11 shrink-0 place-items-center rounded-full bg-zing/12 text-zing">
+            <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+              <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-semibold">Scan a QR code</span>
+            <span className="block truncate text-[13px] text-muted">
+              Point your camera at a friend’s Zing code
+            </span>
+          </span>
+        </button>
+
         {profile && (
           <button
             onClick={() => void start(profile)}
@@ -159,6 +179,16 @@ export default function NewChatPage() {
           </div>
         )}
       </div>
+
+      {scanning && (
+        <QrScanner
+          onUsername={(username) => {
+            setScanning(false);
+            router.push(`/u/${username}`);
+          }}
+          onClose={() => setScanning(false)}
+        />
+      )}
     </div>
   );
 }

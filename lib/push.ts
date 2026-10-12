@@ -30,7 +30,55 @@ export async function pushState(): Promise<PushState> {
  * prompt for good. Asking happens only from a button (enablePush).
  */
 export async function refreshPush(uid: string): Promise<void> {
+  if (isPushPaused(uid)) return;
   if ((await pushState()) === 'granted') await enablePush(uid);
+}
+
+/**
+ * Notifications switched off in Settings, on this device, for this account.
+ * A page cannot take back the browser's permission, so "off" is this device
+ * unregistering its token -- the server then has nowhere to send -- and
+ * remembering not to register again on the next launch.
+ */
+const PAUSED = 'zing.push.off:';
+
+export function isPushPaused(uid: string): boolean {
+  try {
+    return localStorage.getItem(PAUSED + uid) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setPushPaused(uid: string, paused: boolean): Promise<PushOutcome> {
+  try {
+    if (paused) localStorage.setItem(PAUSED + uid, '1');
+    else localStorage.removeItem(PAUSED + uid);
+  } catch {
+    // Private mode: on or off still takes effect now, just not remembered.
+  }
+  if (paused) {
+    await disablePush(uid);
+    return 'granted';
+  }
+  return enablePush(uid);
+}
+
+/** A notification from this device to itself, to check they get through. */
+export async function showTestNotification(): Promise<boolean> {
+  try {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration || Notification.permission !== 'granted') return false;
+    await registration.showNotification('Zing', {
+      body: 'Notifications are working on this device.',
+      tag: 'zing-test',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

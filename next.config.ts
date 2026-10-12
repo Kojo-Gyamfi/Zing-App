@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
+import { version } from './package.json';
 
 const nextConfig: NextConfig = {
+  // Shown in Settings → About, so a bug report can say which build it is.
+  env: { NEXT_PUBLIC_APP_VERSION: version },
+
   // The end-to-end tests run their own dev server against the Firebase
   // emulators; a separate build dir lets it run beside `npm run dev`.
   distDir: process.env.NEXT_DIST_DIR || '.next',
@@ -42,7 +46,7 @@ const nextConfig: NextConfig = {
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=()' },
           // No includeSubDomains/preload: those commit every subdomain of a
           // future custom domain to HTTPS, which is a decision for later.
           { key: 'Strict-Transport-Security', value: 'max-age=63072000' },

@@ -8,6 +8,7 @@ import { useSession } from '@/lib/store/session';
 import { setBlocked, setPhotoVisibility, setPrivacy } from '@/lib/db/privacy';
 import { directChatId } from '@/lib/db/chats';
 import { Avatar } from '@/components/ui/Avatar';
+import { Toggle } from './Toggle';
 import type { PhotoVisibility } from '@/lib/db/schema';
 
 const PHOTO_CHOICES: { value: PhotoVisibility; label: string }[] = [
@@ -36,9 +37,7 @@ export function PrivacySettings({ uid, photoURL }: { uid: string; photoURL: stri
   }
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Privacy</h2>
-
+    <div className="space-y-3">
       <div className="divide-y divide-line rounded-2xl border border-line bg-surface">
         <Toggle
           label="Read receipts"
@@ -87,44 +86,7 @@ export function PrivacySettings({ uid, photoURL }: { uid: string; photoURL: stri
       </div>
 
       {error && <p className="text-[12px] text-danger">{error}</p>}
-    </section>
-  );
-}
-
-function Toggle({
-  label,
-  hint,
-  on,
-  disabled,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  on: boolean;
-  disabled?: boolean;
-  onChange: (on: boolean) => void;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className="flex w-full items-start gap-4 p-4 text-left disabled:opacity-50"
-    >
-      <span className="min-w-0 flex-1">
-        <span className="block text-[14px] font-medium text-ink">{label}</span>
-        <span className="mt-1 block text-[12px] leading-relaxed text-faint">{hint}</span>
-      </span>
-      <span
-        aria-hidden="true"
-        className={`relative mt-0.5 h-6 w-10 shrink-0 rounded-full transition-colors ${on ? 'bg-zing' : 'bg-line'}`}
-      >
-        <span
-          className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-[left] ${on ? 'left-[18px]' : 'left-0.5'}`}
-        />
-      </span>
-    </button>
+    </div>
   );
 }
 

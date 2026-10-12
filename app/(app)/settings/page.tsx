@@ -12,7 +12,6 @@ import {
   updateProfile,
 } from '@/lib/db/users';
 import { formatPhone, limitPhoneInput } from '@/lib/phone';
-import { enablePush, isIOS, pushState, type PushState } from '@/lib/push';
 import { wrapPrivateKey } from '@/lib/crypto/backup';
 import { deleteAccount, NEEDS_FRESH_SIGNIN } from '@/lib/db/account';
 import { emailCodeError, requestCode, verifyCode } from '@/lib/auth/emailCodeClient';
@@ -26,13 +25,103 @@ import { RecoveryKeyDisplay } from '@/components/RecoveryKeyDisplay';
 import { ShareProfileCard } from '@/components/settings/ShareProfileCard';
 import { PrivacySettings } from '@/components/settings/PrivacySettings';
 import { UsernameSetting } from '@/components/settings/UsernameSetting';
+import { SettingsSection, SECTION_ICONS } from '@/components/settings/SettingsSection';
+import {
+  NotificationSettings,
+  notificationSummary,
+  useNotificationStatus,
+} from '@/components/settings/NotificationSettings';
+import { StorageSettings, storageSummary, useStorageEstimate } from '@/components/settings/StorageSettings';
+import { AboutSettings, ChatsSettings, useDraftCount } from '@/components/settings/ChatsSettings';
+import { WALLPAPER_NAMES } from '@/components/settings/WallpaperPicker';
+import { QrScanner } from '@/components/QrScanner';
+import { useAccount } from '@/lib/store/account';
+import { useRouter } from 'next/navigation';
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
 
 const MIN_PASSPHRASE = 10;
 
+const SECTIONS = [
+  'profile',
+  'share',
+  'appearance',
+  'privacy',
+  'notifications',
+  'chats',
+  'security',
+  'storage',
+  'account',
+  'about',
+] as const;
+type SectionId = (typeof SECTIONS)[number];
+
+/** Which sections were left open on this device, remembered between visits. */
+const OPEN_KEY = 'zing.settings.open';
+
+function storedOpenSections(): Set<SectionId> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OPEN_KEY) ?? '[]') as unknown;
+    return new Set(
+      Array.isArray(saved) ? saved.filter((id): id is SectionId => SECTIONS.includes(id)) : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export default function SettingsPage() {
   const { user, profile, identity, signOut, refreshProfile } = useSession();
   const myPhoto = useMyPhoto(profile?.photoURL);
+  const router = useRouter();
+  const appearance = useAccount((state) => state.settings.appearance);
+  const privacy = useAccount((state) => state.settings.privacy);
+  const blocked = useAccount((state) => state.settings.blocked);
+  const notifications = useNotificationStatus(profile?.uid ?? '');
+  const storage = useStorageEstimate();
+  const draftCount = useDraftCount(profile?.uid ?? '');
+  const [scanning, setScanning] = useState(false);
+
+  // Collapsed by default, as left last time otherwise. A link to
+  // /settings#notifications opens that one and brings it into view.
+  const [openSections, setOpenSections] = useState<Set<SectionId>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    const open = storedOpenSections();
+    const target = window.location.hash.slice(1) as SectionId;
+    if (SECTIONS.includes(target)) open.add(target);
+    return open;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(OPEN_KEY, JSON.stringify([...openSections]));
+    } catch {
+      // Not remembered; it still works for this visit.
+    }
+  }, [openSections]);
+  useEffect(() => {
+    const target = window.location.hash.slice(1);
+    if (!SECTIONS.includes(target as SectionId)) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [profile]);
+
+  const toggleSection = (id: SectionId) =>
+    setOpenSections((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const openAll = () => setOpenSections(new Set(SECTIONS));
+  const closeAll = () => setOpenSections(new Set());
+  /** Open one section and bring it into view, as the shortcut buttons do. */
+  const openOnly = (id: SectionId) => {
+    setOpenSections((current) => new Set(current).add(id));
+    requestAnimationFrame(() =>
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+  };
 
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
@@ -128,26 +217,6 @@ export default function SettingsPage() {
   const [newRecoveryKey, setNewRecoveryKey] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
-
-  const [push, setPush] = useState<PushState | null>(null);
-  const [pushBusy, setPushBusy] = useState(false);
-  useEffect(() => {
-    let live = true;
-    void pushState().then((next) => {
-      if (live) setPush(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  async function turnOnPush() {
-    if (!profile) return;
-    setPushBusy(true);
-    const outcome = await enablePush(profile.uid);
-    setPushBusy(false);
-    setPush(outcome === 'granted' ? 'granted' : outcome === 'denied' ? 'denied' : 'unsupported');
-  }
 
   // The number lives in its own doc, not the public profile.
   const uid = profile?.uid;
@@ -291,6 +360,46 @@ export default function SettingsPage() {
 
   if (!profile) return null;
 
+  const theme = { system: 'System', light: 'Light', dark: 'Dark' }[appearance.theme];
+  const summaries: Record<SectionId, string> = {
+    profile: `@${profile.username} · ${profile.displayName}`,
+    share: 'Your QR code and link, and scanning a friend’s',
+    appearance: `${theme} theme · ${WALLPAPER_NAMES[appearance.wallpaper]} wallpaper`,
+    privacy: [
+      privacy.readReceipts ? 'Read receipts on' : 'Read receipts off',
+      privacy.lastSeen ? 'last seen on' : 'last seen off',
+      blocked.length ? `${blocked.length} blocked` : null,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+    notifications: notificationSummary(notifications.status),
+    chats: draftCount
+      ? `Starred, notes to yourself · ${draftCount} unsent draft${draftCount === 1 ? '' : 's'}`
+      : 'Starred messages, notes to yourself, drafts',
+    security:
+      recoveryCreated === undefined
+        ? 'Passphrase and recovery key'
+        : recoveryCreated === null
+          ? 'No recovery key yet — make one'
+          : `Recovery key made ${recoveryCreated.toLocaleDateString()}`,
+    storage: storageSummary(storage.estimate),
+    account: 'Sign out, or delete your account',
+    about: `Version ${process.env.NEXT_PUBLIC_APP_VERSION ?? 'dev'} · end-to-end encrypted`,
+  };
+  const section = (id: SectionId, title: string, children: React.ReactNode, tone?: 'danger') => (
+    <SettingsSection
+      id={id}
+      title={title}
+      summary={summaries[id]}
+      icon={SECTION_ICONS[id]}
+      open={openSections.has(id)}
+      onToggle={() => toggleSection(id)}
+      tone={tone}
+    >
+      {children}
+    </SettingsSection>
+  );
+
   return (
     <div className="h-dvh overflow-y-auto bg-void scroll-thin">
       <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-surface px-2 pt-safe">
@@ -306,17 +415,51 @@ export default function SettingsPage() {
         <h1 className="py-3 text-lg font-semibold">Settings</h1>
       </header>
 
-      <div className="mx-auto max-w-lg space-y-8 p-4 pb-16">
-        <div className="flex items-center gap-4">
-          <Avatar name={profile.displayName} photoURL={myPhoto} size={72} />
-          <div className="min-w-0">
-            <p className="truncate text-lg font-semibold">{profile.displayName}</p>
-            <p className="truncate text-[14px] text-muted">@{profile.username}</p>
+      <div className="mx-auto max-w-lg space-y-3 p-4 pb-16">
+        <div className="mb-5 rounded-3xl border border-line bg-surface p-5">
+          <div className="flex items-center gap-4">
+            <Avatar name={profile.displayName} photoURL={myPhoto} size={64} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-lg font-semibold">{profile.displayName}</p>
+              <p className="truncate text-[14px] text-muted">@{profile.username}</p>
+              {profile.about?.trim() && (
+                <p className="mt-0.5 truncate text-[13px] text-faint">{profile.about}</p>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => openOnly('share')}
+              className="flex h-11 items-center justify-center gap-2 rounded-xl bg-elevated text-[14px] font-medium text-ink transition-colors hover:bg-line"
+            >
+              <svg viewBox="0 0 24 24" className="size-[18px] text-zing" aria-hidden="true">
+                <path d={SECTION_ICONS.share} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              My QR code
+            </button>
+            <button
+              onClick={() => setScanning(true)}
+              className="flex h-11 items-center justify-center gap-2 rounded-xl bg-zing text-[14px] font-semibold text-on-zing transition-colors hover:bg-zing-dim"
+            >
+              <svg viewBox="0 0 24 24" className="size-[18px]" aria-hidden="true">
+                <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Scan QR code
+            </button>
           </div>
         </div>
 
-        <section className="space-y-4">
-          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Profile</h2>
+        <div className="flex items-center justify-between px-1 pb-1">
+          <p className="text-[12px] font-semibold tracking-wide text-muted uppercase">Settings</p>
+          <button
+            onClick={() => (openSections.size === SECTIONS.length ? closeAll() : openAll())}
+            className="text-[12px] font-medium text-zing"
+          >
+            {openSections.size === SECTIONS.length ? 'Collapse all' : 'Expand all'}
+          </button>
+        </div>
+
+        {section('profile', 'Profile', <div className="space-y-4 rounded-2xl border border-line bg-surface p-4">
 
           <UsernameSetting uid={profile.uid} username={profile.username} onChanged={refreshProfile} />
 
@@ -352,66 +495,19 @@ export default function SettingsPage() {
             {saved && <span className="text-[13px] text-zing">Saved</span>}
           </div>
           {saveError && <p className="text-[12px] text-danger">{saveError}</p>}
+        </div>)}
 
-          <p className="text-[12px] text-faint">
-            Your @username cannot be changed — it is tied to your encryption identity.
-          </p>
-        </section>
+        {section('share', 'Share your profile', <ShareProfileCard profile={profile} onScan={() => setScanning(true)} />)}
 
-        <ShareProfileCard profile={profile} />
+        {section('appearance', 'Appearance', <AppearanceSettings uid={profile.uid} />)}
 
-        <AppearanceSettings uid={profile.uid} />
+        {section('privacy', 'Privacy', <PrivacySettings uid={profile.uid} photoURL={myPhoto} />)}
 
-        <PrivacySettings uid={profile.uid} photoURL={myPhoto} />
+        {section('notifications', 'Notifications', <NotificationSettings uid={profile.uid} notifications={notifications} />)}
 
-        <section className="space-y-3">
-          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">
-            Encryption
-          </h2>
+        {section('chats', 'Chats', <ChatsSettings uid={profile.uid} />)}
 
-          <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
-            <p className="text-[12px] leading-relaxed text-faint">
-              Messages are sealed on this device before they are sent. We store them as ciphertext
-              and hold no key that opens them — which also means we cannot recover them for you.
-            </p>
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">
-            Notifications
-          </h2>
-
-          <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
-            <div>
-              <p className="text-[14px] font-medium text-ink">
-                Message notifications
-                {push === 'granted' && <span className="ml-2 text-[13px] text-zing">On</span>}
-              </p>
-              <p className="mt-1 text-[12px] leading-relaxed text-faint">
-                {push === null
-                  ? 'Checking…'
-                  : push === 'granted'
-                    ? 'This device buzzes when a message arrives. The preview is decrypted here — the server only forwards ciphertext.'
-                    : push === 'denied'
-                      ? 'Blocked for Zing in this browser. Tap the icon beside the address bar (or open site settings), allow Notifications, then reload.'
-                      : push === 'unsupported'
-                        ? isIOS()
-                          ? 'On iPhone, add Zing to your Home Screen first (Share → Add to Home Screen), then turn them on from the installed app.'
-                          : 'This browser cannot show notifications.'
-                        : 'Get a notification on this device when someone messages you.'}
-              </p>
-            </div>
-            {push === 'default' && (
-              <Button onClick={() => void turnOnPush()} busy={pushBusy}>
-                Turn on notifications
-              </Button>
-            )}
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Security</h2>
+        {section('security', 'Security', <>
 
           <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
             <div>
@@ -520,10 +616,11 @@ export default function SettingsPage() {
             )}
             {recoveryError && <p className="text-[12px] text-danger">{recoveryError}</p>}
           </div>
-        </section>
+        </>)}
 
-        <section className="space-y-3">
-          <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Account</h2>
+        {section('storage', 'Storage', <StorageSettings storage={storage} />)}
+
+        {section('account', 'Account', <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
 
           {confirmingSignOut ? (
             <div className="space-y-3 rounded-2xl border border-danger/40 bg-surface p-4">
@@ -614,8 +711,20 @@ export default function SettingsPage() {
               Delete my account
             </Button>
           )}
-        </section>
+        </div>, 'danger')}
+
+        {section('about', 'About', <AboutSettings />)}
       </div>
+
+      {scanning && (
+        <QrScanner
+          onUsername={(username) => {
+            setScanning(false);
+            router.push(`/u/${username}`);
+          }}
+          onClose={() => setScanning(false)}
+        />
+      )}
     </div>
   );
 }

@@ -276,7 +276,7 @@ test('two people chat end to end, and history survives a new device', async ({ b
   await expect(alice.getByRole('main').getByText(bobHandle)).toBeVisible();
 
   // Bob deletes his account: Google re-confirms who he is, then it is gone.
-  await bob.goto('/settings');
+  await bob.goto('/settings#account');
   await bob.getByRole('button', { name: 'Delete my account' }).click();
   await bob.getByLabel(`Type ${bobHandle} to confirm`).fill(bobHandle);
   const reauth = bob.waitForEvent('popup');
@@ -331,7 +331,7 @@ test('signs up with an emailed code, on any provider, and can delete the account
   await other.context().close();
 
   // Freshly signed in, so deletion needs no second code.
-  await carol.goto('/settings');
+  await carol.goto('/settings#account');
   await carol.getByRole('button', { name: 'Delete my account' }).click();
   await carol.getByLabel(`Type ${handle} to confirm`).fill(handle);
   await carol.getByRole('button', { name: 'Delete forever' }).click();
@@ -389,7 +389,7 @@ test('formatting, chat filters and light mode', async ({ browser }) => {
 
   // Light mode and a wallpaper: saved to the account, applied at once, and
   // back before the first paint after a reload.
-  await frank.goto('/settings');
+  await frank.goto('/settings#appearance');
   await frank.getByRole('radio', { name: 'Light' }).click();
   await frank.getByRole('radio', { name: 'Ocean' }).click();
   const html = frank.locator('html');
@@ -630,7 +630,7 @@ test('selecting several messages, and changing a username', async ({ browser }) 
 
   // A new @username: the old one stops finding Kim, the new one does.
   const newHandle = `kim2_${run}`;
-  await kim.goto('/settings');
+  await kim.goto('/settings#profile');
   await kim.getByRole('button', { name: 'Change', exact: true }).click();
   await kim.getByLabel('New username').fill(newHandle);
   await kim.getByRole('button', { name: 'Save username' }).click();
@@ -644,4 +644,53 @@ test('selecting several messages, and changing a username', async ({ browser }) 
   await leo.getByLabel('Find someone').fill(`@${newHandle}`);
   await leo.getByRole('button', { name: 'Find' }).click();
   await expect(leo.getByText(`@${newHandle}`)).toBeVisible();
+});
+
+test('settings sections, and scanning a profile code', async ({ browser }) => {
+  const mia = await newPhone(browser);
+  const nia = await newPhone(browser);
+  const miaHandle = `mia_${run}`;
+  const niaHandle = `nia_${run}`;
+
+  await signInWithGoogle(mia, miaHandle);
+  await onboard(mia, miaHandle);
+  await signInWithGoogle(nia, niaHandle);
+  await onboard(nia, niaHandle);
+
+  // Sections start closed, each saying what is set; they open, and the page
+  // remembers which were left open.
+  await nia.goto('/settings');
+  const appearance = nia.getByRole('button', { name: /^Appearance/ });
+  await expect(appearance).toHaveAttribute('aria-expanded', 'false');
+  await expect(appearance).toContainText('Dark theme · Doodles wallpaper');
+  await appearance.click();
+  await expect(appearance).toHaveAttribute('aria-expanded', 'true');
+  await expect(nia.getByRole('radio', { name: 'Light' })).toBeVisible();
+  await nia.reload();
+  await expect(nia.getByRole('button', { name: /^Appearance/ })).toHaveAttribute('aria-expanded', 'true');
+  await nia.getByRole('button', { name: 'Expand all' }).click();
+  await expect(nia.getByRole('button', { name: /^Security/ })).toHaveAttribute('aria-expanded', 'true');
+  await nia.getByRole('button', { name: 'Collapse all' }).click();
+  await expect(nia.getByRole('button', { name: /^Appearance/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(nia.getByRole('button', { name: /^Notifications/ })).toBeVisible();
+
+  // Mia's code, as her phone shows it...
+  await mia.goto('/settings');
+  await mia.getByRole('button', { name: 'My QR code' }).click();
+  const code = await mia.getByRole('img', { name: /QR code for/ }).screenshot();
+
+  // ...scanned by Nia from New chat (a photo of it: no camera in the test).
+  await nia.goto('/chats/new');
+  await nia.getByRole('button', { name: /Scan a QR code/ }).click();
+  const scanner = nia.getByRole('dialog', { name: 'Scan a QR code' });
+  await expect(scanner).toBeVisible();
+  await scanner.locator('input[type=file]').setInputFiles({
+    name: 'code.png',
+    mimeType: 'image/png',
+    buffer: code,
+  });
+  await expect(nia).toHaveURL(new RegExp(`/u/${miaHandle}$`));
+  await expect(nia.getByRole('button', { name: 'Message' })).toBeVisible();
+  // The camera is off once the scanner has closed.
+  await expect(scanner).toHaveCount(0);
 });

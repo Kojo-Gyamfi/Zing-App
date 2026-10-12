@@ -31,9 +31,7 @@ export function AppearanceSettings({ uid }: { uid: string }) {
   }
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-[13px] font-semibold tracking-wide text-muted uppercase">Appearance</h2>
-
+    <div className="space-y-3">
       <div className="divide-y divide-line rounded-2xl border border-line bg-surface">
         <div className="space-y-2.5 p-4">
           <div>
@@ -70,6 +68,6 @@ export function AppearanceSettings({ uid }: { uid: string }) {
       </div>
 
       {error && <p className="text-[12px] text-danger">{error}</p>}
-    </section>
+    </div>
   );
 }

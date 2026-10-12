@@ -192,6 +192,17 @@ rather than letting every decryption fail mysteriously.
   old claim and updates the profile (`changeUsername`). The rules accept the profile's `username`
   change only when `getAfter` shows the new claim is this user's and the old one is gone. The
   public key never changes.
+- **Notifications can be switched off per device** (`setPushPaused` in `lib/push.ts`): a page can't
+  revoke the browser permission, so "off" unregisters this device's token and remembers not to
+  re-register on launch. "Show message previews" is a device setting in IndexedDB that
+  `public/sw.js` reads before it decrypts anything.
+- **QR scanning decodes on the device** (`components/QrScanner.tsx`): `BarcodeDetector` where it
+  exists, the bundled `jsqr` elsewhere, or a chosen photo. Only `/u/{handle}` links and `@handle`
+  are acted on (`lib/qr.ts`); a scanned link is never opened. `Permissions-Policy` allows
+  `camera=(self)` for this, and nothing else.
+- **Settings is collapsible sections** (`components/settings/SettingsSection.tsx`), each with a
+  one-line summary of what's set. Open sections are remembered per device, and `/settings#<id>`
+  opens one.
 - **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
   replaces the header with the actions that fit every selected message. Bulk delete-for-me and
   star are one write each (`hideMessages`, `setStarred` with an array).

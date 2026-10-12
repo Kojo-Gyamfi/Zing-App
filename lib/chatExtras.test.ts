@@ -63,3 +63,28 @@ describe('view once', () => {
     expect(VIEW_ONCE_LABEL).toBe('View once message');
   });
 });
+
+describe('scanning a profile code', async () => {
+  const { usernameFromScan } = await import('./qr');
+
+  it('reads a profile link from any Zing deployment, or a bare @handle', () => {
+    expect(usernameFromScan('https://zing.app/u/ama_k')).toBe('ama_k');
+    expect(usernameFromScan('http://localhost:3000/u/Kofi99/')).toBe('kofi99');
+    expect(usernameFromScan('  @Esi_B ')).toBe('esi_b');
+  });
+
+  it('refuses anything that is not a profile', () => {
+    for (const text of [
+      'https://zing.app/chats/abc',
+      'https://zing.app/u/a',
+      'https://zing.app/u/ama/extra',
+      'javascript:alert(1)',
+      'ftp://x.com/u/ama_k',
+      'hello',
+      '@no spaces',
+      'https://zing.app/u/%E0%A4%A',
+    ]) {
+      expect(usernameFromScan(text)).toBeNull();
+    }
+  });
+});
