@@ -8,8 +8,9 @@ import { WallpaperPicker } from '@/components/settings/WallpaperPicker';
 import { ICONS, Sheet, SheetItem, SheetTitle } from './Sheet';
 import { MutePicker } from './MutePicker';
 import { DisappearingPicker, disappearingLabel } from './Disappearing';
+import type { ExportFormat } from '@/lib/export';
 
-type View = 'main' | 'mute' | 'disappearing' | 'theme' | 'block' | 'clear';
+type View = 'main' | 'mute' | 'disappearing' | 'theme' | 'block' | 'clear' | 'export';
 
 const BUBBLE_NAMES: Record<BubbleColor, string> = {
   teal: 'Teal',
@@ -58,6 +59,7 @@ export function ChatMenu({
   onArchive,
   onBlock,
   onClear,
+  onExport,
   onCloseChat,
   onClose,
 }: {
@@ -91,6 +93,8 @@ export function ChatMenu({
   onArchive: (on: boolean) => void;
   onBlock: (on: boolean) => void;
   onClear: () => void;
+  /** Builds and saves the file; resolves false if the chat could not be read. */
+  onExport?: (format: ExportFormat, onProgress: (count: number) => void) => Promise<boolean>;
   onCloseChat: () => void;
   onClose: () => void;
 }) {
@@ -198,6 +202,10 @@ export function ChatMenu({
     );
   }
 
+  if (view === 'export' && onExport) {
+    return <ExportStep name={name} onExport={onExport} onBack={back} onClose={onClose} />;
+  }
+
   if (view === 'block' || view === 'clear') {
     const clearing = view === 'clear';
     return (
@@ -289,6 +297,14 @@ export function ChatMenu({
             onClick={blocked ? done(() => onBlock(false)) : () => setView('block')}
           />
         )}
+        {onExport && (
+          <SheetItem
+            label="Export chat"
+            hint="Save it as a file on this device"
+            icon="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14"
+            onClick={() => setView('export')}
+          />
+        )}
         <SheetItem
           label="Clear chat"
           hint="Removes every message, for you only"
@@ -305,6 +321,82 @@ export function ChatMenu({
           onClick={done(onCloseChat)}
         />
       </ul>
+    </Sheet>
+  );
+}
+
+/**
+ * Export: pick a format, see the warning, save. The whole conversation is
+ * read and decrypted on this device; the file it makes is not encrypted, so
+ * that is said before it is made, not after.
+ */
+function ExportStep({
+  name,
+  onExport,
+  onBack,
+  onClose,
+}: {
+  name: string;
+  onExport: (format: ExportFormat, onProgress: (count: number) => void) => Promise<boolean>;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const [format, setFormat] = useState<ExportFormat>('txt');
+  const [progress, setProgress] = useState<number | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  async function run() {
+    setFailed(false);
+    setProgress(0);
+    const ok = await onExport(format, setProgress).catch(() => false);
+    setProgress(null);
+    if (ok) onClose();
+    else setFailed(true);
+  }
+
+  return (
+    <Sheet label="Export chat" onClose={onClose}>
+      <SheetTitle onBack={onBack}>Export chat</SheetTitle>
+      <div className="space-y-3 px-2 pb-1">
+        <p className="text-[13px] leading-relaxed text-muted">
+          Every message in your chat with {name} is saved as a file on this device, decrypted here —
+          Zing’s servers aren’t involved.
+        </p>
+        <div role="radiogroup" aria-label="File format" className="grid grid-cols-2 gap-2">
+          {(
+            [
+              ['txt', 'Text (.txt)', 'Easy to read'],
+              ['json', 'Data (.json)', 'For other apps'],
+            ] as const
+          ).map(([value, label, hint]) => (
+            <button
+              key={value}
+              role="radio"
+              aria-checked={format === value}
+              onClick={() => setFormat(value)}
+              className={`rounded-xl border-2 px-3 py-2.5 text-left transition-colors
+                ${format === value ? 'border-zing bg-zing/10' : 'border-line hover:border-muted'}`}
+            >
+              <span className="block text-[14px] font-medium text-ink">{label}</span>
+              <span className="block text-[12px] text-muted">{hint}</span>
+            </button>
+          ))}
+        </div>
+        <p className="rounded-xl bg-danger/10 px-3 py-2 text-[12px] leading-relaxed text-ink">
+          The file is <strong>not encrypted</strong>. Anyone who gets it can read the whole chat — keep
+          it somewhere private.
+        </p>
+        {failed && (
+          <p className="text-[12px] text-danger">Couldn’t read the chat. Check your connection and try again.</p>
+        )}
+        <button
+          onClick={() => void run()}
+          disabled={progress !== null}
+          className="h-11 w-full rounded-xl bg-zing text-[15px] font-semibold text-on-zing disabled:opacity-60"
+        >
+          {progress === null ? 'Export' : `Collecting messages… ${progress}`}
+        </button>
+      </div>
     </Sheet>
   );
 }

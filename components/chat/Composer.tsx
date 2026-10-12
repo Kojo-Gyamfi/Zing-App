@@ -24,6 +24,7 @@ export function Composer({
   onDraftChange,
   allowViewOnce = false,
   autoFocus = false,
+  onAttach,
 }: {
   onSend: (text: string, options: { viewOnce: boolean }) => void | Promise<void>;
   onTyping: () => void;
@@ -40,6 +41,8 @@ export function Composer({
   allowViewOnce?: boolean;
   /** Keyboard up as soon as typing is possible: "Reply" from a notification. */
   autoFocus?: boolean;
+  /** The attach menu (a location, for now). Absent while editing. */
+  onAttach?: () => void;
 }) {
   // The next message goes as view once (lib/viewOnce.ts). Off after each
   // send, as on WhatsApp, so it is never left on by accident.
@@ -413,6 +416,27 @@ export function Composer({
               <span className="absolute top-1.5 right-1 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] leading-none font-semibold text-white">
                 {proof.issues.length}
               </span>
+            </button>
+          )}
+          {onAttach && !editing && (
+            <button
+              type="button"
+              onClick={onAttach}
+              disabled={disabled}
+              aria-label="Attach"
+              title="Share a location"
+              className="grid size-11 shrink-0 place-items-center rounded-full text-muted transition-colors hover:text-ink disabled:opacity-50"
+            >
+              <svg viewBox="0 0 24 24" className="size-[22px]" aria-hidden="true">
+                <path
+                  d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </button>
           )}
           {allowViewOnce && !editing && (

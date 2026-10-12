@@ -1,4 +1,5 @@
 import type { DecryptedMessage } from '@/lib/db/schema';
+import { isLocation } from './location';
 
 /**
  * Search inside a chat. Runs over the plaintext this device has already
@@ -15,7 +16,10 @@ export function findMatches(messages: DecryptedMessage[], query: string): string
   if (!needle) return [];
   return messages
     // A view-once message is never searchable: that would show it twice.
-    .filter((message) => !message.deleted && !message.viewOnce && message.text !== null)
+    // Nor is a shared location: its text is coordinates, not words.
+    .filter(
+      (message) => !message.deleted && !message.viewOnce && message.text !== null && !isLocation(message.text),
+    )
     .filter((message) => normalizeForSearch(message.text!).includes(needle))
     .map((message) => message.id);
 }

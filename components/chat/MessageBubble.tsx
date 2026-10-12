@@ -11,6 +11,7 @@ import { Ticks, type TickState } from './Ticks';
 import type { DecryptedMessage } from '@/lib/db/schema';
 import { VIEW_ONCE_LABEL, viewOnceState } from '@/lib/viewOnce';
 import { languageName, type Translation } from '@/lib/translate';
+import { coordinates, mapsLink, parseLocation, type SharedLocation } from '@/lib/location';
 
 /** How far a bubble must be dragged right before letting go counts as "reply". */
 const SWIPE_TO_REPLY = 56;
@@ -89,8 +90,51 @@ function Run({ run }: { run: FormattedRun }) {
 
 /** A message body with its formatting, links and search hits. */
 export function FormattedText({ text, search = '' }: { text: string; search?: string }) {
-  const runs = useMemo(() => formatText(text, search), [text, search]);
+  const location = useMemo(() => parseLocation(text), [text]);
+  const runs = useMemo(() => (location ? [] : formatText(text, search)), [location, text, search]);
+  if (location) return <LocationCard location={location} />;
   return runs.map((run, index) => <Run key={index} run={run} />);
+}
+
+/**
+ * A shared location: a pin, the coordinates and how precise they are, and a
+ * link to open them in the maps app. Deliberately no map drawn here -- the
+ * tiles would come from a map server, which would learn where this is.
+ */
+export function LocationCard({ location }: { location: SharedLocation }) {
+  return (
+    <a
+      href={mapsLink(location)}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      referrerPolicy="no-referrer"
+      // A tap on the card is not the start of a long-press.
+      onPointerDown={(event) => event.stopPropagation()}
+      className="my-0.5 flex min-w-56 items-center gap-3 rounded-xl bg-inset p-2.5 text-left no-underline"
+    >
+      <span className="grid size-11 shrink-0 place-items-center rounded-full bg-zing/15 text-zing">
+        <svg viewBox="0 0 24 24" className="size-6" aria-hidden="true">
+          <path
+            d="M12 21s-6-5.6-6-10.5a6 6 0 0 1 12 0C18 15.4 12 21 12 21zM12 12.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[15px] font-semibold text-ink">Location</span>
+        <span className="block truncate text-[12px] text-muted tabular-nums">{coordinates(location)}</span>
+        <span className="block text-[12px] font-medium text-zing-soft">
+          Open in Maps
+          {location.accuracy !== null && (
+            <span className="font-normal text-muted"> · within {Math.max(1, Math.round(location.accuracy))} m</span>
+          )}
+        </span>
+      </span>
+    </a>
+  );
 }
 
 /**
@@ -217,9 +261,11 @@ export function MessageBubble({
   const showReactions = reactions.length > 0 && !message.deleted;
   const viewOnce = viewOnceState(message, mine);
   // A view-once message's text only ever shows in its own viewer.
+  const sharedLocation = useMemo(() => parseLocation(message.text), [message.text]);
   const runs = useMemo(
-    () => (message.text && !message.viewOnce ? formatText(message.text, search) : []),
-    [message.text, message.viewOnce, search],
+    () =>
+      message.text && !message.viewOnce && !sharedLocation ? formatText(message.text, search) : [],
+    [message.text, message.viewOnce, sharedLocation, search],
   );
   // The first link outside code, which formatText has already picked out.
   const firstHref = runs.find((run) => run.href)?.href;
@@ -402,11 +448,15 @@ export function MessageBubble({
           </span>
         ) : (
           <>
-            <span className="break-words whitespace-pre-wrap">
-              {runs.map((run, index) => (
-                <Run key={index} run={run} />
-              ))}
-            </span>
+            {sharedLocation ? (
+              <LocationCard location={sharedLocation} />
+            ) : (
+              <span className="break-words whitespace-pre-wrap">
+                {runs.map((run, index) => (
+                  <Run key={index} run={run} />
+                ))}
+              </span>
+            )}
             {card && <LinkPreview card={card} />}
             {translation && (
               <span className="mt-1.5 block border-t border-ink/10 pt-1.5" aria-live="polite">

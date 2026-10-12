@@ -8,6 +8,7 @@ import {
   limit,
   startAfter,
   getDocs,
+  getDocsFromCache,
   onSnapshot,
   writeBatch,
   serverTimestamp,
@@ -21,6 +22,7 @@ import {
   arrayRemove,
   documentId,
   type QueryDocumentSnapshot,
+  type QuerySnapshot,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase/client';
 import { seal, open } from '@/lib/crypto/envelope';
@@ -644,6 +646,52 @@ export function subscribeMessages(
     },
     (error) => onError?.(error),
   );
+}
+
+/**
+ * The newest messages of a chat that this device already holds, from
+ * Firestore's own offline cache -- never the server -- decrypted here. What a
+ * search across all chats looks through: on-device only, by design.
+ */
+export async function cachedMessages(
+  chatId: string,
+  conversationKey: Uint8Array,
+  max = 500,
+): Promise<DecryptedMessage[]> {
+  const snapshot = await getDocsFromCache(
+    query(collection(db(), 'chats', chatId, 'messages'), orderBy('createdAt', 'desc'), limit(max)),
+  ).catch(() => null);
+  if (!snapshot) return [];
+  return Promise.all(snapshot.docs.map((entry) => decrypt(entry, conversationKey)));
+}
+
+/**
+ * The whole conversation, oldest first, decrypted here: what "Export chat"
+ * writes out. Read from the server a page at a time (one read per message,
+ * only when someone asks for an export), starting after a "Clear chat".
+ */
+export async function loadAllMessages(
+  chatId: string,
+  conversationKey: Uint8Array,
+  options: { after?: Date | null; onProgress?: (count: number) => void } = {},
+): Promise<DecryptedMessage[]> {
+  const all: DecryptedMessage[] = [];
+  let cursor: QueryDocumentSnapshot | null = null;
+  for (;;) {
+    const snapshot: QuerySnapshot = await getDocs(
+      query(
+        collection(db(), 'chats', chatId, 'messages'),
+        ...(options.after ? [where('createdAt', '>', options.after)] : []),
+        orderBy('createdAt', 'asc'),
+        ...(cursor ? [startAfter(cursor)] : []),
+        limit(200),
+      ),
+    );
+    all.push(...(await Promise.all(snapshot.docs.map((entry) => decrypt(entry, conversationKey)))));
+    options.onProgress?.(all.length);
+    if (snapshot.docs.length < 200) return all;
+    cursor = snapshot.docs[snapshot.docs.length - 1];
+  }
 }
 
 /**

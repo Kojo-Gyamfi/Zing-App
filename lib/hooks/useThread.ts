@@ -804,6 +804,8 @@ export function useThread(chatId: string, peerUid: string | null) {
     deleteForEveryone,
     deleteForMe,
     clearChat,
+    /** What I removed from this chat (deleted for me, or cleared). */
+    hiddenList,
     openViewOnce,
     /** Pinned messages, oldest pin first, as this device can show them. */
     pinned,
