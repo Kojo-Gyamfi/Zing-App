@@ -19,6 +19,7 @@
     "@sentry/nextjs": "^11.1.0",
     "firebase": "^12.18.0",
     "firebase-admin": "^14.3.0",
+    "harper.js": "2.10.0",
     "idb": "^8.0.3",
     "jsqr": "^1.4.0",
     "libphonenumber-js": "^1.13.14",

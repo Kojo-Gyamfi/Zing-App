@@ -35,6 +35,7 @@ import { StorageSettings, storageSummary, useStorageEstimate } from '@/component
 import { AboutSettings, ChatsSettings, useDraftCount } from '@/components/settings/ChatsSettings';
 import { WALLPAPER_NAMES } from '@/components/settings/WallpaperPicker';
 import { QrScanner } from '@/components/QrScanner';
+import { TypingSettings, typingSummary } from '@/components/settings/TypingSettings';
 import { useAccount } from '@/lib/store/account';
 import { useRouter } from 'next/navigation';
 import { AppearanceSettings } from '@/components/settings/AppearanceSettings';
@@ -48,6 +49,7 @@ const SECTIONS = [
   'privacy',
   'notifications',
   'chats',
+  'typing',
   'security',
   'storage',
   'account',
@@ -76,6 +78,7 @@ export default function SettingsPage() {
   const appearance = useAccount((state) => state.settings.appearance);
   const privacy = useAccount((state) => state.settings.privacy);
   const blocked = useAccount((state) => state.settings.blocked);
+  const proofreadSettings = useAccount((state) => state.settings.proofread);
   const notifications = useNotificationStatus(profile?.uid ?? '');
   const storage = useStorageEstimate();
   const draftCount = useDraftCount(profile?.uid ?? '');
@@ -376,6 +379,7 @@ export default function SettingsPage() {
     chats: draftCount
       ? `Starred, notes to yourself · ${draftCount} unsent draft${draftCount === 1 ? '' : 's'}`
       : 'Starred messages, notes to yourself, drafts',
+    typing: typingSummary(proofreadSettings.on, proofreadSettings.dialect),
     security:
       recoveryCreated === undefined
         ? 'Passphrase and recovery key'
@@ -506,6 +510,8 @@ export default function SettingsPage() {
         {section('notifications', 'Notifications', <NotificationSettings uid={profile.uid} notifications={notifications} />)}
 
         {section('chats', 'Chats', <ChatsSettings uid={profile.uid} />)}
+
+        {section('typing', 'Typing', <TypingSettings uid={profile.uid} />)}
 
         {section('security', 'Security', <>
 

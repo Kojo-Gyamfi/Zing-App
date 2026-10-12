@@ -38,6 +38,8 @@
   --color-inset: rgb(0 0 0 / 0.2);
 
   --color-danger: #ff5f57;
+  /* Grammar underlines in the composer; spelling ones use danger. */
+  --color-grammar: #5aa9ff;
 
   /* Motion: short and snappy. The name of the app is a promise about speed. */
   --ease-zing: cubic-bezier(0.22, 1, 0.36, 1);
@@ -77,6 +79,7 @@
   --color-inset: rgb(0 0 0 / 0.05);
 
   --color-danger: #d63a31;
+  --color-grammar: #1f6fd1;
 }
 
 html,

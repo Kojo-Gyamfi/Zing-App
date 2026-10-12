@@ -1,6 +1,7 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { KeyBackup } from '@/lib/crypto/types';
 import type { Appearance, ChatTheme } from '@/lib/appearance';
+import type { Proofread } from '@/lib/proofread';
 
 /**
  * Firestore document shapes.
@@ -52,6 +53,8 @@ export type AccountDoc = {
   appearance?: Partial<Appearance>;
   /** Per-chat wallpaper and bubble colour, overriding `appearance`. */
   chatThemes?: Record<string, ChatTheme>;
+  /** Spelling and grammar checking while typing (lib/proofread.ts). */
+  proofread?: Partial<Proofread>;
   /** What this user calls other people, by uid. Only they see it (lib/names.ts). */
   nicknames?: Record<string, string>;
   /** What this user shows other people. A missing field means the default. */

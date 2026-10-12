@@ -694,3 +694,63 @@ test('settings sections, and scanning a profile code', async ({ browser }) => {
   // The camera is off once the scanner has closed.
   await expect(scanner).toHaveCount(0);
 });
+
+test('spelling and grammar, checked on the device as you type', async ({ browser }) => {
+  test.setTimeout(240_000);
+  const olga = await newPhone(browser);
+  const pete = await newPhone(browser);
+  const olgaHandle = `olga_${run}`;
+  const peteHandle = `pete_${run}`;
+
+  await signInWithGoogle(olga, olgaHandle);
+  await onboard(olga, olgaHandle);
+  await signInWithGoogle(pete, peteHandle);
+  await onboard(pete, peteHandle);
+
+  await olga.getByRole('link', { name: 'New chat' }).click();
+  await olga.getByLabel('Find someone').fill(`@${peteHandle}`);
+  await olga.getByRole('button', { name: 'Find' }).click();
+  await olga.getByRole('button', { name: 'Chat', exact: true }).click();
+
+  // Nothing typed may go anywhere but this app and its own backends.
+  const elsewhere: string[] = [];
+  olga.on('request', (request) => {
+    const host = new URL(request.url()).hostname;
+    if (!['localhost', '127.0.0.1'].includes(host) && !host.endsWith('googleapis.com')) {
+      elsewhere.push(request.url());
+    }
+  });
+
+  const box = olga.getByPlaceholder('Message');
+  await box.click();
+  await box.pressSequentially('this is teh best');
+  // The engine loads the first time; after that each check is quick.
+  const mark = olga.locator('mark', { hasText: 'teh' });
+  await expect(mark).toHaveCount(1, { timeout: 120_000 });
+  const chip = olga.getByRole('button', { name: /spelling and grammar suggestion/ });
+  await expect(chip).toBeVisible();
+
+  // The chip steps to the mistake; its fix replaces it in place.
+  await chip.click();
+  const strip = olga.getByRole('region', { name: 'Spelling suggestion' });
+  await expect(strip).toContainText('Did you mean');
+  await strip.getByRole('button', { name: 'the', exact: true }).click();
+  await expect(box).toHaveValue('this is the best');
+  await expect(mark).toHaveCount(0);
+
+  // Grammar too, in its own colour; and sending is never held up by it.
+  await box.pressSequentially('. Meet me their at 5');
+  await expect(olga.locator('mark', { hasText: 'their' })).toHaveCount(1, { timeout: 30_000 });
+  await olga.getByRole('button', { name: 'Send' }).click();
+  await expect(pete.getByLabel('1 unread')).toBeVisible();
+  expect(elsewhere).toEqual([]);
+
+  // Switched off in Settings: no more underlines.
+  await olga.goto('/settings#typing');
+  await olga.getByRole('switch', { name: /Check spelling & grammar/ }).click();
+  await expect(olga.getByRole('button', { name: /^Typing/ })).toContainText('check off');
+  await olga.goBack();
+  await olga.getByPlaceholder('Message').pressSequentially('teh end');
+  await olga.waitForTimeout(1500);
+  await expect(olga.locator('mark', { hasText: 'teh' })).toHaveCount(0);
+});

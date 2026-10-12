@@ -14,6 +14,7 @@ import { useKeys } from '@/lib/store/keys';
 import { useProfiles } from '@/lib/store/profiles';
 import { watchAccount } from '@/lib/store/account';
 import { clearDrafts } from '@/lib/store/drafts';
+import { clearDictionaries } from '@/lib/proofread';
 import type { Identity } from '@/lib/crypto/types';
 import type { UserDoc } from '@/lib/db/schema';
 
@@ -166,6 +167,7 @@ export const useSession = create<SessionState>((set, get) => ({
         if (get().user) {
           setAppBadge(0);
           clearDrafts();
+          clearDictionaries();
           void clearIdentity().catch(() => undefined);
         }
         set({ status: 'signedOut', user: null, profile: null, identity: null });
@@ -215,6 +217,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // read half-typed messages.
     setAppBadge(0);
     clearDrafts();
+    clearDictionaries();
     // Storage that cannot be opened holds no key we could read back either;
     // signing out must still happen, or the button silently does nothing --
     // and blocked storage is exactly what strands people on /unlock.

@@ -17,6 +17,7 @@ import {
 } from '@/lib/appearance';
 import { muteEnds, type MuteDuration } from '@/lib/mute';
 import { cleanNickname, toNicknames } from '@/lib/names';
+import { DEFAULT_PROOFREAD, toProofread, type Proofread } from '@/lib/proofread';
 import { DEFAULT_PRIVACY, type AccountDoc, type Privacy } from './schema';
 
 /**
@@ -57,6 +58,7 @@ export type AccountSettings = {
   chatThemes: Record<string, ChatTheme>;
   /** My names for other people, by uid. */
   nicknames: Record<string, string>;
+  proofread: Proofread;
 };
 
 export const NO_ACCOUNT: AccountSettings = {
@@ -67,6 +69,7 @@ export const NO_ACCOUNT: AccountSettings = {
   appearance: DEFAULT_APPEARANCE,
   chatThemes: {},
   nicknames: {},
+  proofread: DEFAULT_PROOFREAD,
 };
 
 const accountRef = (uid: string) => doc(db(), 'users', uid, 'private', 'account');
@@ -107,6 +110,7 @@ export function subscribeAccount(
           appearance: toAppearance(data?.appearance),
           chatThemes: toChatThemes(data?.chatThemes),
           nicknames: toNicknames(data?.nicknames),
+          proofread: toProofread(data?.proofread),
         },
         snapshot.exists() || !snapshot.metadata.fromCache,
       );
@@ -175,6 +179,11 @@ export async function setChatTheme(
 export async function setNickname(uid: string, peerUid: string, name: string | null): Promise<void> {
   const clean = name === null ? null : cleanNickname(name);
   await setDoc(accountRef(uid), { nicknames: { [peerUid]: clean ?? deleteField() } }, { merge: true });
+}
+
+/** Spelling and grammar checking: on or off, and which English. */
+export async function setProofread(uid: string, patch: Partial<Proofread>): Promise<void> {
+  await setDoc(accountRef(uid), { proofread: patch }, { merge: true });
 }
 
 /** Theme or wallpaper. Merged field by field, so one never resets the other. */

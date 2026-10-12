@@ -203,6 +203,13 @@ rather than letting every decryption fail mysteriously.
 - **Settings is collapsible sections** (`components/settings/SettingsSection.tsx`), each with a
   one-line summary of what's set. Open sections are remembered per device, and `/settings#<id>`
   opens one.
+- **Spelling & grammar is checked on the device only** (`lib/proofread.ts`, Harper's WASM via
+  `harper.js`, loaded lazily from this origin). Never add a cloud checker: it would read every message
+  before encryption. The composer underlines through a mirror layer behind the textarea
+  (`useProofread`), and sending is never blocked. The setting syncs on the account doc
+  (`proofread`); "Add to dictionary" words stay in this device's localStorage and are cleared at
+  sign-out. It uses `LocalLinter`, not `WorkerLinter`: the worker version needs `blob:` workers in
+  the CSP, and its download was aborted in Chrome.
 - **Selecting several messages** is page state in the thread (`selected`); `SelectionBar`
   replaces the header with the actions that fit every selected message. Bulk delete-for-me and
   star are one write each (`hideMessages`, `setStarred` with an array).

@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { EmojiPanel } from './EmojiPanel';
 import { MAX_MESSAGE_LENGTH } from '@/lib/db/schema';
 import { plainText } from '@/lib/formatting';
+import { useProofread } from '@/lib/hooks/useProofread';
+import { applyFix, issueAt, type Issue } from '@/lib/proofread';
 
 /** What the next send means, besides "a new message". */
 export type ComposerContext =
@@ -40,6 +42,12 @@ export function Composer({
   // send, as on WhatsApp, so it is never left on by accident.
   const [text, setText] = useState(draft);
   const [viewOnce, setViewOnce] = useState(false);
+  // Spelling and grammar, checked on this device (lib/proofread.ts).
+  const proof = useProofread(text, !disabled);
+  const mirror = useRef<HTMLDivElement>(null);
+  // Where the caret is, for the fix strip: the issue it sits in, if any.
+  const [caretAt, setCaretAt] = useState<number | null>(null);
+  const activeIssue = caretAt === null ? null : issueAt(proof.issues, caretAt);
   // What was being typed before an edit took over the box, put back after.
   const [kept, setKept] = useState(draft);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -115,7 +123,35 @@ export function Composer({
 
   function rememberCaret() {
     const node = box.current;
-    if (node) caret.current = { start: node.selectionStart, end: node.selectionEnd };
+    if (!node) return;
+    caret.current = { start: node.selectionStart, end: node.selectionEnd };
+    setCaretAt(node.selectionStart === node.selectionEnd ? node.selectionStart : null);
+  }
+
+  /** Put the caret somewhere, keyboard up, and show the issue there. */
+  function placeCaret(position: number) {
+    const node = box.current;
+    if (!node) return;
+    node.focus();
+    node.setSelectionRange(position, position);
+    caret.current = { start: position, end: position };
+    setCaretAt(position);
+  }
+
+  function fix(issue: Issue, replacement: string) {
+    const next = applyFix(text, issue, replacement);
+    setText(next.text);
+    requestAnimationFrame(() => {
+      grow();
+      placeCaret(next.caret);
+    });
+  }
+
+  /** The next issue after the caret, round to the first: the count chip. */
+  function nextIssue() {
+    const from = caretAt ?? -1;
+    const next = proof.issues.find((issue) => issue.start > from) ?? proof.issues[0];
+    if (next) placeCaret(next.end);
   }
 
   /** The remembered caret, or the end of the text; clamped in case the text changed since. */
@@ -209,6 +245,52 @@ export function Composer({
         </div>
       )}
 
+      {activeIssue && (
+        <div
+          role="region"
+          aria-label={activeIssue.kind === 'spelling' ? 'Spelling suggestion' : 'Grammar suggestion'}
+          className="mb-2 rounded-xl bg-elevated px-3 py-2"
+          // Taps here must not take the keyboard away.
+          onPointerDown={(event) => event.preventDefault()}
+        >
+          <p className="flex items-center gap-1.5 text-[12px] text-muted">
+            <span
+              className={`size-2 shrink-0 rounded-full ${activeIssue.kind === 'spelling' ? 'bg-danger' : 'bg-grammar'}`}
+              aria-hidden="true"
+            />
+            <span className="truncate">{activeIssue.message}</span>
+          </p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {activeIssue.suggestions.map((suggestion) => (
+              <button
+                key={suggestion || 'remove'}
+                type="button"
+                onClick={() => fix(activeIssue, suggestion)}
+                className="h-8 rounded-full bg-zing px-3 text-[14px] font-medium text-on-zing"
+              >
+                {suggestion === '' ? `Remove “${activeIssue.text}”` : suggestion}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => proof.ignore(activeIssue)}
+              className="h-8 rounded-full px-3 text-[13px] text-muted hover:text-ink"
+            >
+              Ignore
+            </button>
+            {activeIssue.kind === 'spelling' && (
+              <button
+                type="button"
+                onClick={() => proof.addWord(activeIssue)}
+                className="h-8 rounded-full px-3 text-[13px] text-muted hover:text-ink"
+              >
+                Add to dictionary
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         <div className="flex min-w-0 flex-1 items-end rounded-2xl bg-elevated">
           <button
@@ -233,11 +315,31 @@ export function Composer({
               </svg>
             )}
           </button>
+          <div className="relative min-w-0 flex-1">
+          {/* The underlines: a copy of the text in invisible ink, laid exactly
+              under the textarea, with each issue's letters underlined. */}
+          {proof.on && proof.issues.length > 0 && (
+            <div
+              ref={mirror}
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-0 overflow-hidden py-3 text-[16px] leading-snug
+                break-words whitespace-pre-wrap text-transparent ${allowViewOnce && !editing ? 'pr-1' : 'pr-4'}`}
+            >
+              {underlined(text, proof.issues)}
+            </div>
+          )}
           <textarea
             ref={box}
             rows={1}
             value={text}
             disabled={disabled}
+            // Our own check replaces the browser's: two sets of squiggles is one too many.
+            spellCheck={!proof.on}
+            onScroll={(event) => {
+              if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop;
+            }}
+            onKeyUp={rememberCaret}
+            onClick={rememberCaret}
             onChange={(event) => {
               setText(event.target.value);
               rememberCaret();
@@ -249,6 +351,7 @@ export function Composer({
             // Tapping the box on a phone means "keyboard please": the panel gives way.
             onFocus={() => {
               if (emojiOpen && isTouch()) setEmojiOpen(false);
+              proof.prepare();
             }}
             onKeyDown={(event) => {
               if (event.key === 'Escape' && emojiOpen) {
@@ -284,10 +387,28 @@ export function Composer({
             }
             maxLength={MAX_MESSAGE_LENGTH}
             /* 16px keeps iOS from zooming the viewport when the field takes focus. */
-            className={`max-h-[140px] min-h-[44px] min-w-0 flex-1 resize-none bg-transparent py-3
-              text-[16px] leading-snug text-ink placeholder:text-faint
+            className={`relative block max-h-[140px] min-h-[44px] w-full resize-none bg-transparent py-3
+              text-[16px] leading-snug break-words whitespace-pre-wrap text-ink placeholder:text-faint
               focus:outline-none disabled:opacity-50 ${allowViewOnce && !editing ? 'pr-1' : 'pr-4'}`}
           />
+          </div>
+          {proof.on && proof.issues.length > 0 && (
+            <button
+              type="button"
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={nextIssue}
+              aria-label={`${proof.issues.length} spelling and grammar ${proof.issues.length === 1 ? 'suggestion' : 'suggestions'}`}
+              title="Next suggestion"
+              className="relative grid size-11 shrink-0 place-items-center rounded-full text-muted transition-colors hover:text-ink"
+            >
+              <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+                <path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="absolute top-1.5 right-1 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] leading-none font-semibold text-white">
+                {proof.issues.length}
+              </span>
+            </button>
+          )}
           {allowViewOnce && !editing && (
             <button
               type="button"
@@ -367,4 +488,32 @@ export function Composer({
       {emojiOpen && <EmojiPanel onPick={insertEmoji} onBackspace={backspace} />}
     </div>
   );
+}
+
+/**
+ * The text with each issue's letters wrapped for an underline: red and wavy
+ * for spelling, blue and dotted for grammar, as word processors do. A last
+ * zero-width space keeps a trailing line break the same height as the
+ * textarea's.
+ */
+function underlined(text: string, issues: Issue[]) {
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  for (const issue of issues) {
+    if (issue.start < at) continue;
+    parts.push(text.slice(at, issue.start));
+    parts.push(
+      <mark
+        key={issue.start}
+        className={`bg-transparent text-transparent underline decoration-2 underline-offset-[5px] ${
+          issue.kind === 'spelling' ? 'decoration-danger decoration-wavy' : 'decoration-grammar decoration-dotted'
+        }`}
+      >
+        {text.slice(issue.start, issue.end)}
+      </mark>,
+    );
+    at = issue.end;
+  }
+  parts.push(text.slice(at) + '\u200b');
+  return parts;
 }
