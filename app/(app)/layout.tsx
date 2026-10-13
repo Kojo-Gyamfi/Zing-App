@@ -6,6 +6,7 @@ import { useSession } from '@/lib/store/session';
 import { Splash } from '@/components/Splash';
 import { InstallCoach } from '@/components/InstallCoach';
 import { OfflineBanner } from '@/components/OfflineBanner';
+import { KeepStorage } from '@/components/KeySafety';
 import { clearReturnTo, rememberReturnTo } from '@/lib/returnTo';
 
 /**
@@ -45,6 +46,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {children}
       <InstallCoach />
       <OfflineBanner />
+      <KeepStorage />
     </>
   );
 }

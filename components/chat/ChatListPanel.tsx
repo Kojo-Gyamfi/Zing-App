@@ -22,6 +22,7 @@ import { useDrafts } from '@/lib/store/drafts';
 import { Avatar } from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
 import { NotificationPrompt } from '@/components/NotificationPrompt';
+import { RecoveryPrompt } from '@/components/KeySafety';
 import { ChatRowMenu } from './ChatRowMenu';
 
 const LONG_PRESS_MS = 450;
@@ -241,6 +242,7 @@ export function ChatListPanel() {
         </div>
       )}
 
+      <RecoveryPrompt />
       <NotificationPrompt />
 
       <div

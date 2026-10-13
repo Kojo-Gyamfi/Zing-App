@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   coordinates,
   encodeLocation,
@@ -9,7 +9,14 @@ import {
 } from './location';
 import { plainText } from './formatting';
 import { findMatches } from './search';
-import { exportAsJson, exportAsText, exportedText, exportFilename } from './export';
+import {
+  collectForExport,
+  exportAsJson,
+  exportAsText,
+  exportedText,
+  exportFilename,
+  forgetExports,
+} from './export';
 import type { DecryptedMessage } from './db/schema';
 
 const accra = { lat: 5.603716, lng: -0.186964, accuracy: 18.4 };
@@ -91,5 +98,41 @@ describe('exporting a chat', () => {
 
   it('names the file safely', () => {
     expect(exportFilename('Ama / "Work"', 'txt')).toMatch(/^Zing chat with Ama  Work - \d{4}-\d{2}-\d{2}\.txt$/);
+  });
+});
+
+describe('collecting a chat for export', () => {
+  afterEach(() => {
+    forgetExports();
+    vi.useRealTimers();
+  });
+
+  it('reads the chat once for an export soon after, and again later', async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => []);
+    await collectForExport('me:chat', load);
+    await collectForExport('me:chat', load);
+    expect(load).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2 * 60_000);
+    await collectForExport('me:chat', load);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps one chat only, and nothing after sign-out', async () => {
+    const load = vi.fn(async () => []);
+    await collectForExport('me:a', load);
+    await collectForExport('me:b', load);
+    await collectForExport('me:a', load);
+    expect(load).toHaveBeenCalledTimes(3);
+    forgetExports();
+    await collectForExport('me:a', load);
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps nothing when reading fails', async () => {
+    await expect(collectForExport('me:c', () => Promise.reject(new Error('offline')))).rejects.toThrow();
+    const load = vi.fn(async () => []);
+    await collectForExport('me:c', load);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
